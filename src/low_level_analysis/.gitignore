@@ -1,0 +1,5 @@
+__pycache__
+ghidra_out
+ghidra_headless.log
+pyvenv.cfg
+run_ghidra_batch.sh
