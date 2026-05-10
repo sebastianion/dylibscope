@@ -5,10 +5,10 @@ import plotly.graph_objects as go
 import json
 from pathlib import Path
 
-from config.ios_versions import VERSION_ORDER, IOS_VERSION
-from analysis_graph.models import AnalysisConfig
-from config.versioning import normalize_ios_versions
-from config.io import load_jsonl
+from dylibscope.config.ios_versions import VERSION_ORDER, IOS_VERSION
+from dylibscope.analysis_graph.models import AnalysisConfig
+from dylibscope.config.versioning import normalize_ios_versions
+from dylibscope.config.io import load_jsonl
 
 
 class Graph:

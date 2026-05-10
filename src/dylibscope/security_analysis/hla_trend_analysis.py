@@ -5,11 +5,11 @@ import math
 from typing import Dict, List
 
 import pandas as pd
-from config.ios_versions import VERSION_ORDER
-from config.io import load_jsonl
-from config.versioning import normalize_version_label
+from dylibscope.config.ios_versions import VERSION_ORDER
+from dylibscope.config.io import load_jsonl
+from dylibscope.config.versioning import normalize_version_label
 
-from security_analysis.utils.common_utils import (
+from dylibscope.security_analysis.utils.common_utils import (
     pick_col,
     lib_base,
     to_int,
@@ -18,7 +18,7 @@ from security_analysis.utils.common_utils import (
     pct_change,
 )
 
-from security_analysis.utils.hla_utils import *
+from dylibscope.security_analysis.utils.hla_utils import *
 
 
 def raw_risk_row(num_symbols: float, import_count: float, num_sections: float) -> float:

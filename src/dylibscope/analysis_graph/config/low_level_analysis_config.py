@@ -1,5 +1,5 @@
-from analysis_graph.models import AnalysisConfig, SecurityProfile
-from config.paths import DOCS_DIR, SRC_DIR
+from dylibscope.analysis_graph.models import AnalysisConfig, SecurityProfile
+from dylibscope.config.paths import DOCS_DIR, PACKAGE_DIR
 
 LLA_METRICS = {
     "cfg_edge_count": "Complexity of control flow graph (number of edges)",
@@ -14,7 +14,7 @@ DEFAULT_LLA_METRIC_KEY = "cfg_edge_count"
 LLA_LIBRARY_LABEL = "library"
 LLA_TITLE = "Evolution of libraries across iOS versions: Low level analysis"
 
-LLA_INPUT_FILE_PATH = SRC_DIR / "low_level_analysis" / "ghidra_out" / "merged.json"
+LLA_INPUT_FILE_PATH = PACKAGE_DIR / "low_level_analysis" / "ghidra_out" / "merged.json"
 LLA_OUTPUT_FILE_NAME = DOCS_DIR / "low_level_analysis_dylib_evolution.html"
 
 LLA_WEIGHTS = {
