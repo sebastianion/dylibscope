@@ -1,4 +1,5 @@
 from analysis_graph.models import AnalysisConfig, SecurityProfile
+from config.paths import DOCS_DIR, SRC_DIR
 
 LLA_METRICS = {
     "cfg_edge_count": "Complexity of control flow graph (number of edges)",
@@ -13,8 +14,8 @@ DEFAULT_LLA_METRIC_KEY = "cfg_edge_count"
 LLA_LIBRARY_LABEL = "library"
 LLA_TITLE = "Evolution of libraries across iOS versions: Low level analysis"
 
-LLA_INPUT_FILE_PATH = "low_level_analysis/ghidra_out/merged.json"
-LLA_OUTPUT_FILE_NAME = "output_analysis_graph/low_level_analysis_dylib_evolution.html"
+LLA_INPUT_FILE_PATH = SRC_DIR / "low_level_analysis" / "ghidra_out" / "merged.json"
+LLA_OUTPUT_FILE_NAME = DOCS_DIR / "low_level_analysis_dylib_evolution.html"
 
 LLA_WEIGHTS = {
     "mach_port_function_count": 1.0,

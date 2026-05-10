@@ -1,5 +1,6 @@
 from pandas import DataFrame
 from analysis_graph.models import AnalysisConfig, SecurityProfile
+from config.paths import DOCS_DIR, SRC_DIR
 
 def hla_preprocess(df: DataFrame):
     df["num_exported_functions"] = df["exported_functions"].apply(lambda x: len(x.split(";")) if x else 0)
@@ -17,8 +18,8 @@ DEFAULT_HLA_METRIC_KEY = "num_symbols"
 HLA_LIBRARY_LABEL = "file"
 HLA_TITLE = "Evolution of libraries across iOS versions: High level analysis"
 
-HLA_INPUT_FILE_PATH = "high_level_analysis/dylibs_analysis_local.json"
-HLA_OUTPUT_FILE_NAME = "output_analysis_graph/high_level_analysis_dylib_evolution.html"
+HLA_INPUT_FILE_PATH = SRC_DIR / "high_level_analysis" / "dylibs_analysis_local.json"
+HLA_OUTPUT_FILE_NAME = DOCS_DIR / "high_level_analysis_dylib_evolution.html"
 
 HLA_WEIGHTS = {
     "num_exported_functions": 1.0,

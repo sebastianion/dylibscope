@@ -1,7 +1,9 @@
+from __future__ import annotations
 import pandas as pd
 from pandas import DataFrame
 import plotly.graph_objects as go
 import json
+from pathlib import Path
 
 from analysis_graph.config.ios_version_config import VERSION_MAP
 from analysis_graph.config.ios_version_config import VERSION_ORDER
@@ -149,10 +151,12 @@ class Graph:
             categoryarray=VERSION_ORDER
         )
     
-    def save_to_file(self, output_file_name: str):
-        self.fig.write_html(output_file_name, include_plotlyjs="cdn", full_html=True)
+    def save_to_file(self, output_file_name: str | Path):
+        output_file = Path(output_file_name)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        self.fig.write_html(str(output_file), include_plotlyjs="cdn", full_html=True)
 
-    def render(self, output_file_name: str) -> None:
+    def render(self, output_file_name: str | Path) -> None:
         self.sort_df_by_label()
         self.build_figure()
         self.handle_convergence_points()
