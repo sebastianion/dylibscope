@@ -6,11 +6,13 @@ from typing import Dict, List
 
 import pandas as pd
 
+
+from config.ios_versions import VERSION_ORDER
+from config.io import load_jsonl
+from config.versioning import normalize_version_label
+
 from security_analysis.utils.common_utils import (
-    VERSION_ORDER,
-    load_jsonl,
     pick_col,
-    normalize_version_label,
     lib_base,
     to_int,
     norm01,
@@ -18,6 +20,7 @@ from security_analysis.utils.common_utils import (
 )
 
 from security_analysis.utils.lla_utils import *
+
 
 def raw_risk_lib(cfg: float, alloc: float, mach: float, syscall: float) -> float:
     return (

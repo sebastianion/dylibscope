@@ -5,11 +5,10 @@ import plotly.graph_objects as go
 import json
 from pathlib import Path
 
-from analysis_graph.config.ios_version_config import VERSION_MAP
-from analysis_graph.config.ios_version_config import VERSION_ORDER
-from analysis_graph.config.ios_version_config import IOS_VERSION
+from config.ios_versions import VERSION_ORDER, IOS_VERSION
 from analysis_graph.models import AnalysisConfig
-from config.utils import load_ios_versions_in_data_frame
+from config.versioning import normalize_ios_versions
+from config.io import load_jsonl
 
 
 class Graph:
@@ -26,22 +25,18 @@ class Graph:
         self.overlay_indices = []
         self.buttons = []
 
+
     def __create_data_frame(self, data_file: str):
-        df = self.__load_data_in_data_frame(data_file)
+        df = load_jsonl(data_file)
         if self.preprocess:
             df = self.preprocess(df)
 
-        return load_ios_versions_in_data_frame(df)
-
-    def __load_data_in_data_frame(self, data_file: str):
-        data = []
-        with open(data_file) as f:
-            for line in f:
-                data.append(json.loads(line))
-        return pd.DataFrame(data)
+        return normalize_ios_versions(df)
+    
 
     def sort_df_by_label(self):
         self.df = self.df.sort_values([self.library_label, IOS_VERSION])
+
 
     def build_figure(self):
         for metric_key in self.metrics.keys():
@@ -58,6 +53,7 @@ class Graph:
         self.fig.update_traces(
             hovertemplate="<b>%{fullData.name}</b><br>Value: %{y}<extra></extra>"
         )
+
 
     def handle_convergence_points(self):
         for metric_key, label in self.metrics.items():
@@ -99,6 +95,7 @@ class Graph:
                 visible=(metric_key == self.default_metric_label)
             ))
     
+
     def create_dropdown_buttons(self):
         n_libs = len(self.libs)
         for i, (metric_key, label) in enumerate(self.metrics.items()):
@@ -124,6 +121,7 @@ class Graph:
                     },
                 ],
             ))
+
 
     def update_layout(self):
         menu = dict(
@@ -151,10 +149,12 @@ class Graph:
             categoryarray=VERSION_ORDER
         )
     
+
     def save_to_file(self, output_file_name: str | Path):
         output_file = Path(output_file_name)
         output_file.parent.mkdir(parents=True, exist_ok=True)
         self.fig.write_html(str(output_file), include_plotlyjs="cdn", full_html=True)
+
 
     def render(self, output_file_name: str | Path) -> None:
         self.sort_df_by_label()

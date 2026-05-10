@@ -17,7 +17,7 @@ VERSION_MAP = {
     "iPhone5,1_9.1_13B143": "iOS 9.1",
     "iPhone5,1_9.2_13C75": "iOS 9.2",
     "iPhone5,1_9.3_13E237": "iOS 9.3",
-    "iPhone6,2_11.0.0_15A372": "iOS 11.0"
+    "iPhone6,2_11.0.0_15A372": "iOS 11.0",
 }
 
 VERSION_ORDER = [
