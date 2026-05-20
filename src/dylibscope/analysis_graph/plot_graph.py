@@ -61,7 +61,7 @@ class Graph:
             tmp.rename(columns={metric_key: "value"}, inplace=True)
 
             dup = (
-                tmp.groupby([IOS_VERSION, "value"])[self.library_label]
+                tmp.groupby([IOS_VERSION, "value"], observed=False)[self.library_label]
                 .agg(list)
                 .reset_index()
             )
