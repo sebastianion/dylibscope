@@ -1,71 +1,53 @@
 from __future__ import annotations
 
 import argparse
-import math
-from typing import Dict, List
+from pathlib import Path
 
 import pandas as pd
-from dylibscope.config.ios_versions import VERSION_ORDER
-from dylibscope.config.io import load_jsonl
-from dylibscope.config.versioning import normalize_version_label
 
+from dylibscope.config.io import load_jsonl
+from dylibscope.config.ios_versions import VERSION_ORDER
+from dylibscope.config.versioning import normalize_version_label
 from dylibscope.security_analysis.utils.common_utils import (
-    pick_col,
-    lib_base,
-    to_int,
     count_semicolon_list,
+    lib_base,
     norm01,
     pct_change,
+    pick_col,
+    to_int,
+)
+from dylibscope.security_analysis.utils.hla_utils import (
+    DEFAULT_HLA_INPUT,
+    HL_METRICS,
+    MIN_COMMON,
+    MIN_LIBS_FOR_VERSION,
+    MIN_OVERLAP,
+    W_TRIAGE,
+    HlaTrendReportRow,
+    classify,
+    format_hla_report,
+    raw_risk_row,
 )
 
-from dylibscope.security_analysis.utils.hla_utils import *
 
+def load_and_prepare_hla_data(input_path: str | Path) -> pd.DataFrame:
+    df = load_jsonl(input_path)
 
-def raw_risk_row(num_symbols: float, import_count: float, num_sections: float) -> float:
-    return (
-        W_RAW["num_symbols"] * math.log1p(max(num_symbols, 0.0))
-        + W_RAW["import_count"] * math.log1p(max(import_count, 0.0))
-        + W_RAW["num_sections"] * math.log1p(max(num_sections, 0.0))
+    version_column = pick_col(df, ["ios_version", "version", "ios", "os_version"])
+    library_column = pick_col(df, ["file", "library", "lib", "name"])
+    sections_column = pick_col(df, ["num_sections"])
+    symbols_column = pick_col(df, ["num_symbols"])
+    imports_column = pick_col(df, ["imported_functions"])
+
+    df = df.rename(
+        columns={
+            version_column: "ios_version",
+            library_column: "library",
+            sections_column: "num_sections",
+            symbols_column: "num_symbols",
+            imports_column: "imported_functions",
+        }
     )
-
-
-def classify(d_raw: float, d_syms: float, d_imps: float, d_secs: float) -> str:
-    up = sum([d_syms >= THR_SYMS, d_imps >= THR_IMPS, d_secs >= THR_SECS])
-    down = sum([d_syms <= -THR_SYMS, d_imps <= -THR_IMPS, d_secs <= -THR_SECS])
-
-    expanding_a = (d_raw >= THR_RAW_RISK) and (up >= 1)
-    hardening_a = (d_raw <= -THR_RAW_RISK) and (down >= 1)
-
-    expanding_b = (up >= 2)
-    hardening_b = (down >= 2)
-
-    if hardening_a or hardening_b:
-        return "hardening"
-    if expanding_a or expanding_b:
-        return "expanding"
-    return "stable"
-
-
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--in", dest="in_path", required=True)
-    ap.add_argument("--topk", type=int, default=20)
-    args = ap.parse_args()
-
-    df = load_jsonl(args.in_path)
-    vcol = pick_col(df, ["ios_version", "version", "ios", "os_version"])
-    fcol = pick_col(df, ["file", "library", "lib", "name"])
-    scol = pick_col(df, ["num_sections"])
-    ycol = pick_col(df, ["num_symbols"])
-    impcol = pick_col(df, ["imported_functions"])
-
-    df = df.rename(columns={
-        vcol: "ios_version",
-        fcol: "library",
-        scol: "num_sections",
-        ycol: "num_symbols",
-        impcol: "imported_functions",
-    })
 
     df["ios_version"] = df["ios_version"].map(normalize_version_label)
     df["library"] = df["library"].map(lib_base)
@@ -74,98 +56,245 @@ def main() -> None:
     df["num_symbols"] = df["num_symbols"].map(to_int)
     df["import_count"] = df["imported_functions"].map(count_semicolon_list)
 
-    df = df.groupby(["ios_version", "library"], as_index=False).agg({
-        "num_sections": "max",
-        "num_symbols": "max",
-        "import_count": "max",
-    })
-
-    present_versions = set(df["ios_version"].unique())
-    versions = [v for v in VERSION_ORDER if v in present_versions]
-
-    per_version: Dict[str, pd.DataFrame] = {}
-    summary: Dict[str, Dict[str, float]] = {}
-
-    for v in versions:
-        dv = df[df["ios_version"] == v].copy()
-        for m in HL_METRICS:
-            dv[m + "_n"] = norm01(dv[m])
-
-        dv["triage_risk"] = (
-            W_TRIAGE["num_symbols"] * dv["num_symbols_n"]
-            + W_TRIAGE["import_count"] * dv["import_count_n"]
-            + W_TRIAGE["num_sections"] * dv["num_sections_n"]
-        )
-
-        dv["raw_risk"] = dv.apply(lambda r: raw_risk_row(r["num_symbols"], r["import_count"], r["num_sections"]), axis=1)
-
-        topk = dv.sort_values("triage_risk", ascending=False).head(args.topk)
-        version_risk = float(topk["triage_risk"].mean()) if len(topk) else 0.0
-
-        lib_count = int(len(dv))
-        dq = "ok" if lib_count >= MIN_LIBS_FOR_VERSION else "partial"
-
-        per_version[v] = dv[["library", "raw_risk"] + HL_METRICS].copy()
-        summary[v] = {"vr": version_risk, "libs": lib_count, "dq": dq}
-
-    rows_out: List[str] = []
-    prev_v = None
-
-    header = (
-        "iOS_VERSION   VERSION_RISK  DATA_QUALITY  RELEASE_LABEL"
-        "COMMON  OVERLAP  ΔRAW%   ΔSYMS%  ΔIMPS%  ΔSECS%  LIBS"
+    return df.groupby(["ios_version", "library"], as_index=False).agg(
+        {
+            "num_sections": "max",
+            "num_symbols": "max",
+            "import_count": "max",
+        }
     )
 
-    for v in versions:
-        vr = summary[v]["vr"]
-        dq = summary[v]["dq"]
-        libs = summary[v]["libs"]
 
-        if prev_v is None:
-            rows_out.append(
-                f"{v:<12} {vr:>12.6f}  {dq:<12}  {'n/a':<20} {'-':>6}  {'-':>7}  {'-':>6}  {'-':>6}  {'-':>6}  {'-':>6}  {libs:>4}"
-            )
-            prev_v = v
-            continue
+def compute_version_tables(
+    df: pd.DataFrame,
+    topk: int,
+) -> tuple[list[str], dict[str, pd.DataFrame], dict[str, dict[str, float | int | str]]]:
+    present_versions = set(df["ios_version"].unique())
+    versions = [version for version in VERSION_ORDER if version in present_versions]
 
-        prev_dq = summary[prev_v]["dq"]
-        if prev_dq != "ok" or dq != "ok":
-            rows_out.append(
-                f"{v:<12} {vr:>12.6f}  {dq:<12}  {'partial_snapshot':<20} {'-':>6}  {'-':>7}  {'-':>6}  {'-':>6}  {'-':>6}  {'-':>6}  {libs:>4}"
-            )
-            prev_v = v
-            continue
+    per_version: dict[str, pd.DataFrame] = {}
+    summary: dict[str, dict[str, float | int | str]] = {}
 
-        a = per_version[prev_v]
-        b = per_version[v]
-        common = a.merge(b, on="library", how="inner", suffixes=("_prev", "_cur"))
-        common_libs = int(len(common))
-        overlap = common_libs / max(len(a), len(b)) if max(len(a), len(b)) else 0.0
+    for version in versions:
+        version_df = df[df["ios_version"] == version].copy()
 
-        if common_libs < MIN_COMMON or overlap < MIN_OVERLAP:
-            rows_out.append(
-                f"{v:<12} {vr:>12.6f}  {dq:<12}  {'insufficient_overlap':<20} {common_libs:>6}  {overlap:>7.3f}  {'-':>6}  {'-':>6}  {'-':>6}  {'-':>6}  {libs:>4}"
-            )
-            prev_v = v
-            continue
+        for metric in HL_METRICS:
+            version_df[f"{metric}_n"] = norm01(version_df[metric])
 
-        d_raw = pct_change(float(common["raw_risk_prev"].mean()), float(common["raw_risk_cur"].mean()))
-        d_syms = pct_change(float(common["num_symbols_prev"].mean()), float(common["num_symbols_cur"].mean()))
-        d_imps = pct_change(float(common["import_count_prev"].mean()), float(common["import_count_cur"].mean()))
-        d_secs = pct_change(float(common["num_sections_prev"].mean()), float(common["num_sections_cur"].mean()))
+        version_df["triage_risk"] = 0.0
 
-        lab = classify(d_raw, d_syms, d_imps, d_secs)
+        for metric, weight in W_TRIAGE.items():
+            version_df["triage_risk"] += weight * version_df[f"{metric}_n"]
 
-        rows_out.append(
-            f"{v:<12} {vr:>12.6f}  {dq:<12}  {lab:<20} {common_libs:>6}  {overlap:>7.3f}  {d_raw*100:>6.2f}  {d_syms*100:>6.2f}  {d_imps*100:>6.2f}  {d_secs*100:>6.2f}  {libs:>4}"
+        version_df["raw_risk"] = version_df.apply(
+            lambda row: raw_risk_row(
+                row["num_symbols"],
+                row["import_count"],
+                row["num_sections"],
+            ),
+            axis=1,
         )
 
-        prev_v = v
+        top_libraries = version_df.sort_values(
+            "triage_risk",
+            ascending=False,
+        ).head(topk)
 
-    print(header)
-    print("-" * len(header))
-    for line in rows_out:
-        print(line)
+        version_risk = (
+            float(top_libraries["triage_risk"].mean())
+            if len(top_libraries)
+            else 0.0
+        )
+
+        lib_count = int(len(version_df))
+        data_quality = "ok" if lib_count >= MIN_LIBS_FOR_VERSION else "partial"
+
+        per_version[version] = version_df[
+            ["library", "raw_risk"] + HL_METRICS
+        ].copy()
+
+        summary[version] = {
+            "version_risk": version_risk,
+            "libs": lib_count,
+            "data_quality": data_quality,
+        }
+
+    return versions, per_version, summary
+
+
+def build_hla_trend_rows(
+    versions: list[str],
+    per_version: dict[str, pd.DataFrame],
+    summary: dict[str, dict[str, float | int | str]],
+) -> list[HlaTrendReportRow]:
+    rows: list[HlaTrendReportRow] = []
+    previous_version: str | None = None
+
+    for version in versions:
+        version_risk = float(summary[version]["version_risk"])
+        data_quality = str(summary[version]["data_quality"])
+        libs = int(summary[version]["libs"])
+
+        if previous_version is None:
+            rows.append(
+                HlaTrendReportRow(
+                    ios_version=version,
+                    version_risk=version_risk,
+                    data_quality=data_quality,
+                    release_label="n/a",
+                    common=None,
+                    overlap=None,
+                    delta_raw=None,
+                    delta_symbols=None,
+                    delta_imports=None,
+                    delta_sections=None,
+                    libs=libs,
+                )
+            )
+            previous_version = version
+            continue
+
+        previous_data_quality = str(summary[previous_version]["data_quality"])
+
+        if previous_data_quality != "ok" or data_quality != "ok":
+            rows.append(
+                HlaTrendReportRow(
+                    ios_version=version,
+                    version_risk=version_risk,
+                    data_quality=data_quality,
+                    release_label="partial_snapshot",
+                    common=None,
+                    overlap=None,
+                    delta_raw=None,
+                    delta_symbols=None,
+                    delta_imports=None,
+                    delta_sections=None,
+                    libs=libs,
+                )
+            )
+            previous_version = version
+            continue
+
+        previous_df = per_version[previous_version]
+        current_df = per_version[version]
+
+        common = previous_df.merge(
+            current_df,
+            on="library",
+            how="inner",
+            suffixes=("_prev", "_cur"),
+        )
+
+        common_libs = int(len(common))
+        overlap = (
+            common_libs / max(len(previous_df), len(current_df))
+            if max(len(previous_df), len(current_df))
+            else 0.0
+        )
+
+        if common_libs < MIN_COMMON or overlap < MIN_OVERLAP:
+            rows.append(
+                HlaTrendReportRow(
+                    ios_version=version,
+                    version_risk=version_risk,
+                    data_quality=data_quality,
+                    release_label="insufficient_overlap",
+                    common=common_libs,
+                    overlap=overlap,
+                    delta_raw=None,
+                    delta_symbols=None,
+                    delta_imports=None,
+                    delta_sections=None,
+                    libs=libs,
+                )
+            )
+            previous_version = version
+            continue
+
+        delta_raw = pct_change(
+            float(common["raw_risk_prev"].mean()),
+            float(common["raw_risk_cur"].mean()),
+        )
+
+        delta_symbols = pct_change(
+            float(common["num_symbols_prev"].mean()),
+            float(common["num_symbols_cur"].mean()),
+        )
+
+        delta_imports = pct_change(
+            float(common["import_count_prev"].mean()),
+            float(common["import_count_cur"].mean()),
+        )
+
+        delta_sections = pct_change(
+            float(common["num_sections_prev"].mean()),
+            float(common["num_sections_cur"].mean()),
+        )
+
+        release_label = classify(delta_raw, delta_symbols, delta_imports, delta_sections)
+
+        rows.append(
+            HlaTrendReportRow(
+                ios_version=version,
+                version_risk=version_risk,
+                data_quality=data_quality,
+                release_label=release_label,
+                common=common_libs,
+                overlap=overlap,
+                delta_raw=delta_raw,
+                delta_symbols=delta_symbols,
+                delta_imports=delta_imports,
+                delta_sections=delta_sections,
+                libs=libs,
+            )
+        )
+
+        previous_version = version
+
+    return rows
+
+
+def run_hla_trend_analysis(
+    input_path: str | Path = DEFAULT_HLA_INPUT,
+    topk: int = 20,
+    print_report: bool = True,
+) -> list[HlaTrendReportRow]:
+    df = load_and_prepare_hla_data(input_path)
+    versions, per_version, summary = compute_version_tables(df, topk)
+    rows = build_hla_trend_rows(versions, per_version, summary)
+
+    if print_report:
+        print(format_hla_report(rows))
+
+    return rows
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Generate the high-level DylibScope security trend report."
+    )
+
+    parser.add_argument(
+        "--in",
+        dest="input_path",
+        type=Path,
+        default=DEFAULT_HLA_INPUT,
+        help="Path to the high-level JSONL dataset.",
+    )
+
+    parser.add_argument(
+        "--topk",
+        type=int,
+        default=20,
+        help="Number of highest-risk libraries used for version-level risk.",
+    )
+
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    run_hla_trend_analysis(input_path=args.input_path, topk=args.topk)
 
 
 if __name__ == "__main__":
