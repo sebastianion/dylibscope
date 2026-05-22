@@ -100,18 +100,12 @@ def compute_version_tables(
             ascending=False,
         ).head(topk)
 
-        version_risk = (
-            float(top_libraries["triage_risk"].mean())
-            if len(top_libraries)
-            else 0.0
-        )
+        version_risk = float(top_libraries["triage_risk"].mean()) if len(top_libraries) else 0.0
 
         lib_count = int(len(version_df))
         data_quality = "ok" if lib_count >= MIN_LIBS_FOR_VERSION else "partial"
 
-        per_version[version] = version_df[
-            ["library", "raw_risk"] + HL_METRICS
-        ].copy()
+        per_version[version] = version_df[["library", "raw_risk"] + HL_METRICS].copy()
 
         summary[version] = {
             "version_risk": version_risk,
@@ -187,9 +181,7 @@ def build_hla_trend_rows(
 
         common_libs = int(len(common))
         overlap = (
-            common_libs / max(len(previous_df), len(current_df))
-            if max(len(previous_df), len(current_df))
-            else 0.0
+            common_libs / max(len(previous_df), len(current_df)) if max(len(previous_df), len(current_df)) else 0.0
         )
 
         if common_libs < MIN_COMMON or overlap < MIN_OVERLAP:
@@ -270,9 +262,7 @@ def run_hla_trend_analysis(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Generate the high-level DylibScope security trend report."
-    )
+    parser = argparse.ArgumentParser(description="Generate the high-level DylibScope security trend report.")
 
     parser.add_argument(
         "--in",

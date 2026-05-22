@@ -9,7 +9,6 @@ from dylibscope.config.io import load_jsonl
 from dylibscope.config.ios_versions import VERSION_ORDER
 from dylibscope.config.versioning import normalize_version_label
 from dylibscope.security_analysis.utils.common_utils import lib_base, norm01, pct_change, pick_col, to_int
-
 from dylibscope.security_analysis.utils.lla_utils import (
     ALL_METRICS,
     DEFAULT_LLA_INPUT,
@@ -19,10 +18,9 @@ from dylibscope.security_analysis.utils.lla_utils import (
     RISK_METRICS,
     WEIGHTS,
     TrendReportRow,
-    raw_risk_lib,
     classify,
     format_lla_report,
-    format_lla_report
+    raw_risk_lib,
 )
 
 
@@ -48,9 +46,7 @@ def load_and_prepare_lla_data(input_path: str | Path) -> pd.DataFrame:
 
         df[metric] = df[metric].map(to_int)
 
-    return df.groupby(["ios_version", "library"], as_index=False).agg(
-        {metric: "max" for metric in ALL_METRICS}
-    )
+    return df.groupby(["ios_version", "library"], as_index=False).agg({metric: "max" for metric in ALL_METRICS})
 
 
 def compute_version_tables(
@@ -74,10 +70,7 @@ def compute_version_tables(
         for metric, weight in WEIGHTS.items():
             version_df["triage_risk"] += weight * version_df[f"{metric}_n"]
 
-        version_df["boundary"] = (
-            version_df["mach_port_function_count"]
-            + version_df["syscall_function_count"]
-        )
+        version_df["boundary"] = version_df["mach_port_function_count"] + version_df["syscall_function_count"]
 
         version_df["raw_risk"] = version_df.apply(
             lambda row: raw_risk_lib(
@@ -94,18 +87,12 @@ def compute_version_tables(
             ascending=False,
         ).head(topk)
 
-        version_risk = (
-            float(top_libraries["triage_risk"].mean())
-            if len(top_libraries)
-            else 0.0
-        )
+        version_risk = float(top_libraries["triage_risk"].mean()) if len(top_libraries) else 0.0
 
         lib_count = int(len(version_df))
         data_quality = "ok" if lib_count >= MIN_LIBS_FOR_VERSION else "partial"
 
-        per_version[version] = version_df[
-            ["library", "raw_risk"] + ALL_METRICS
-        ].copy()
+        per_version[version] = version_df[["library", "raw_risk"] + ALL_METRICS].copy()
 
         summary[version] = {
             "version_risk": version_risk,
@@ -185,9 +172,7 @@ def build_lla_trend_rows(
 
         common_libs = int(len(common))
         overlap = (
-            common_libs / max(len(previous_df), len(current_df))
-            if max(len(previous_df), len(current_df))
-            else 0.0
+            common_libs / max(len(previous_df), len(current_df)) if max(len(previous_df), len(current_df)) else 0.0
         )
 
         if common_libs < MIN_COMMON or overlap < MIN_OVERLAP:
@@ -226,18 +211,10 @@ def build_lla_trend_rows(
         )
 
         previous_boundary = float(
-            (
-                common["mach_port_function_count_prev"]
-                + common["syscall_function_count_prev"]
-            ).mean()
+            (common["mach_port_function_count_prev"] + common["syscall_function_count_prev"]).mean()
         )
 
-        current_boundary = float(
-            (
-                common["mach_port_function_count_cur"]
-                + common["syscall_function_count_cur"]
-            ).mean()
-        )
+        current_boundary = float((common["mach_port_function_count_cur"] + common["syscall_function_count_cur"]).mean())
 
         delta_boundary = pct_change(previous_boundary, current_boundary)
         release_label = classify(delta_raw, delta_cfg, delta_alloc, delta_boundary)
@@ -280,9 +257,7 @@ def run_lla_trend_analysis(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Generate the low-level DylibScope security trend report."
-    )
+    parser = argparse.ArgumentParser(description="Generate the low-level DylibScope security trend report.")
 
     parser.add_argument(
         "--in",

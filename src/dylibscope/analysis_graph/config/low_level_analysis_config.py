@@ -7,10 +7,10 @@ LLA_METRICS = {
     "internal_variable_count": "Number of internal variables",
     "mach_port_function_count": "Number of functions containing mach-port calls",
     "syscall_function_count": "Number of syscalls",
-    "allocation_call_count": "Number of allocation calls"
+    "allocation_call_count": "Number of allocation calls",
 }
 
-DEFAULT_LLA_METRIC_KEY = "cfg_edge_count" 
+DEFAULT_LLA_METRIC_KEY = "cfg_edge_count"
 LLA_LIBRARY_LABEL = "library"
 LLA_TITLE = "Evolution of libraries across iOS versions: Low level analysis"
 
@@ -23,7 +23,7 @@ LLA_WEIGHTS = {
     "cfg_edge_count": 0.6,
     "internal_function_count": 0.4,
     "internal_variable_count": 0.3,
-    "allocation_call_count": 0.2
+    "allocation_call_count": 0.2,
 }
 
 LLA_SECURITY_LENS = {
@@ -36,14 +36,7 @@ LLA_SECURITY_LENS = {
 }
 
 LLA = AnalysisConfig(
-    metrics=LLA_METRICS,
-    default_metric_label=DEFAULT_LLA_METRIC_KEY,
-    library_label=LLA_LIBRARY_LABEL,
-    title=LLA_TITLE
+    metrics=LLA_METRICS, default_metric_label=DEFAULT_LLA_METRIC_KEY, library_label=LLA_LIBRARY_LABEL, title=LLA_TITLE
 )
 
-LLA_SECURITY = SecurityProfile(
-    name = "lla",
-    weights = LLA_WEIGHTS,
-    security_lens = LLA_SECURITY_LENS
-)
+LLA_SECURITY = SecurityProfile(name="lla", weights=LLA_WEIGHTS, security_lens=LLA_SECURITY_LENS)

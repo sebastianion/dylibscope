@@ -1,6 +1,7 @@
-import lief
 import json
 import os
+
+import lief
 
 
 def extract_ios_deployment(binary):
@@ -23,8 +24,8 @@ def analyze_dylib(path, ios_root_label):
 
         return {
             "file": os.path.basename(path),
-            "deployment_target": extract_ios_deployment(binary),  
-            "ios_version": ios_root_label,                       
+            "deployment_target": extract_ios_deployment(binary),
+            "ios_version": ios_root_label,
             "path": path,
             "num_sections": len(binary.sections),
             "num_symbols": len(binary.symbols),
@@ -60,7 +61,7 @@ def analyze_from_filelist(list_path, output_path="dylibs_analysis_local.json", r
     count = 0
 
     with open(output_path, "w") as out_f:
-        with open(list_path, "r") as f:
+        with open(list_path) as f:
             for line in f:
                 parent_path = line.strip()
                 if not parent_path or parent_path.startswith("#"):
@@ -89,5 +90,5 @@ def main():
     analyze_from_filelist("dylib_list.txt")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

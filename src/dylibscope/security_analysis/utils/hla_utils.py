@@ -5,7 +5,6 @@ from dataclasses import dataclass
 
 from dylibscope.config.paths import PACKAGE_DIR
 
-
 HL_METRICS = ["num_symbols", "import_count", "num_sections"]
 
 W_RAW = {
@@ -58,8 +57,8 @@ def classify(d_raw: float, d_syms: float, d_imps: float, d_secs: float) -> str:
     expanding_a = (d_raw >= THR_RAW_RISK) and (up >= 1)
     hardening_a = (d_raw <= -THR_RAW_RISK) and (down >= 1)
 
-    expanding_b = (up >= 2)
-    hardening_b = (down >= 2)
+    expanding_b = up >= 2
+    hardening_b = down >= 2
 
     if hardening_a or hardening_b:
         return "hardening"

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import pandas as pd
 from pandas import DataFrame
-from dylibscope.config.ios_versions import VERSION_MAP, VERSION_ORDER, IOS_VERSION
+
+from dylibscope.config.ios_versions import IOS_VERSION, VERSION_MAP, VERSION_ORDER
 
 
 def normalize_version_label(raw: str) -> str:

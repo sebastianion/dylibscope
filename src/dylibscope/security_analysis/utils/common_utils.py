@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import json
-from typing import List
 import pandas as pd
 
 
-def pick_col(df: pd.DataFrame, candidates: List[str]) -> str:
+def pick_col(df: pd.DataFrame, candidates: list[str]) -> str:
     cols = {c.lower(): c for c in df.columns}
     for cand in candidates:
         if cand.lower() in cols:
@@ -50,7 +48,7 @@ def pct_change(prev: float, cur: float) -> float:
     return (cur - prev) / abs(prev)
 
 
-def table_print(header: str, rows: List[str]) -> None:
+def table_print(header: str, rows: list[str]) -> None:
     print(header)
     print("-" * len(header))
     for line in rows:

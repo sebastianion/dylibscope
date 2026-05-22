@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import math
-from dylibscope.config.paths import PACKAGE_DIR
 from dataclasses import dataclass
 
+from dylibscope.config.paths import PACKAGE_DIR
 
 RISK_METRICS = ["cfg_edge_count", "allocation_call_count", "mach_port_function_count", "syscall_function_count"]
 ALL_METRICS = RISK_METRICS + ["internal_function_count", "internal_variable_count"]
@@ -59,15 +59,11 @@ def classify(
     delta_boundary: float,
 ) -> str:
     hardening = (delta_raw_risk <= -THR_RAW_RISK) and (
-        delta_boundary <= -THR_BOUNDARY
-        or delta_alloc <= -THR_ALLOC
-        or delta_cfg <= -THR_CFG
+        delta_boundary <= -THR_BOUNDARY or delta_alloc <= -THR_ALLOC or delta_cfg <= -THR_CFG
     )
 
     expanding = (delta_raw_risk >= THR_RAW_RISK) and (
-        delta_boundary >= THR_BOUNDARY
-        or delta_alloc >= THR_ALLOC
-        or delta_cfg >= THR_CFG
+        delta_boundary >= THR_BOUNDARY or delta_alloc >= THR_ALLOC or delta_cfg >= THR_CFG
     )
 
     if hardening:

@@ -21,11 +21,25 @@ VERSION_MAP = {
 }
 
 VERSION_ORDER = [
-    "iOS 6.0", "iOS 7.0", "iOS 8.0", "iOS 8.1",
-    "iOS 8.3", "iOS 8.4", "iOS 9.0", "iOS 9.1",
-    "iOS 9.2", "iOS 9.3", "iOS 10.0.1",
-    "iOS 10.1", "iOS 10.2", "iOS 10.3", "iOS 10.3.3",
-    "iOS 11.0", "iOS 11.1.2", "iOS 11.2.5", "iOS 12.0"
+    "iOS 6.0",
+    "iOS 7.0",
+    "iOS 8.0",
+    "iOS 8.1",
+    "iOS 8.3",
+    "iOS 8.4",
+    "iOS 9.0",
+    "iOS 9.1",
+    "iOS 9.2",
+    "iOS 9.3",
+    "iOS 10.0.1",
+    "iOS 10.1",
+    "iOS 10.2",
+    "iOS 10.3",
+    "iOS 10.3.3",
+    "iOS 11.0",
+    "iOS 11.1.2",
+    "iOS 11.2.5",
+    "iOS 12.0",
 ]
 
 IOS_VERSION = "ios_version"

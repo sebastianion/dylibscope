@@ -1,34 +1,37 @@
-import os, json
-from ghidra.program.model.symbol import RefType
+# ruff: noqa: F821
+import json
+import os
+
 from ghidra.program.model.block import BasicBlockModel
-
-from java.nio.file import Paths, StandardOpenOption, Files
-from java.nio.channels import FileChannel
+from ghidra.program.model.symbol import RefType
 from java.nio import ByteBuffer
+from java.nio.channels import FileChannel
+from java.nio.file import Files, Paths, StandardOpenOption
 
-
-VERSION_TAGS = set([
-    "iPhone1,1_1.0.2_1C28",
-    "iPhone11,8_12.0_16A366",
-    "iPhone_4.0_64bit_10.0.1_14A403",
-    "iPhone_4.0_64bit_10.1_14B72",
-    "iPhone_4.0_64bit_10.2_14C92",
-    "iPhone_4.0_64bit_10.3.3_14G60",
-    "iPhone_4.0_64bit_10.3_14E277",
-    "iPhone_4.0_64bit_11.1.2_15B202",
-    "iPhone_4.0_64bit_11.2.5_15D60",
-    "iPhone5,1_6.0_10A405",
-    "iPhone5,1_7.0_11A465",
-    "iPhone5,1_8.0_12A365",
-    "iPhone5,1_8.1_12B411",
-    "iPhone5,1_8.3_12F70",
-    "iPhone5,1_8.4_12H143",
-    "iPhone5,1_9.0_13A344",
-    "iPhone5,1_9.1_13B143",
-    "iPhone5,1_9.2_13C75",
-    "iPhone5,1_9.3_13E237",
-    "iPhone6,2_11.0.0_15A372",
-])
+VERSION_TAGS = set(
+    [
+        "iPhone1,1_1.0.2_1C28",
+        "iPhone11,8_12.0_16A366",
+        "iPhone_4.0_64bit_10.0.1_14A403",
+        "iPhone_4.0_64bit_10.1_14B72",
+        "iPhone_4.0_64bit_10.2_14C92",
+        "iPhone_4.0_64bit_10.3.3_14G60",
+        "iPhone_4.0_64bit_10.3_14E277",
+        "iPhone_4.0_64bit_11.1.2_15B202",
+        "iPhone_4.0_64bit_11.2.5_15D60",
+        "iPhone5,1_6.0_10A405",
+        "iPhone5,1_7.0_11A465",
+        "iPhone5,1_8.0_12A365",
+        "iPhone5,1_8.1_12B411",
+        "iPhone5,1_8.3_12F70",
+        "iPhone5,1_8.4_12H143",
+        "iPhone5,1_9.0_13A344",
+        "iPhone5,1_9.1_13B143",
+        "iPhone5,1_9.2_13C75",
+        "iPhone5,1_9.3_13E237",
+        "iPhone6,2_11.0.0_15A372",
+    ]
+)
 
 args = getScriptArgs()
 outpath = args[0] if len(args) >= 1 else os.path.join(os.getcwd(), "ghidra_library_metrics.jsonl")
@@ -45,9 +48,17 @@ binary_name = program.getName()
 bbm = BasicBlockModel(program)
 
 ALLOC_KEYWORDS = (
-    "malloc", "calloc", "realloc", "valloc", "pvalloc",
-    "memalign", "posix_memalign", "aligned_alloc",
-    "malloc_zone_malloc", "malloc_zone_calloc", "malloc_zone_realloc",
+    "malloc",
+    "calloc",
+    "realloc",
+    "valloc",
+    "pvalloc",
+    "memalign",
+    "posix_memalign",
+    "aligned_alloc",
+    "malloc_zone_malloc",
+    "malloc_zone_calloc",
+    "malloc_zone_realloc",
 )
 ALLOC_EXCLUDE = ("free", "dealloc", "destroy")
 
@@ -57,13 +68,13 @@ def get_exec_path(prog):
         p = prog.getExecutablePath()
         if p:
             return str(p)
-    except:
+    except Exception:
         pass
     try:
         df = prog.getDomainFile()
         if df:
             return str(df.getPathname())
-    except:
+    except Exception:
         pass
     return prog.getName()
 
@@ -92,13 +103,14 @@ def is_internal_function(func):
     try:
         if func.isExternal():
             return False
-    except:
+    except Exception:
         pass
     try:
         body = func.getBody()
         return body is not None and not body.isEmpty()
-    except:
+    except Exception:
         return False
+
 
 def count_cfg_edges(func):
     edges = 0
@@ -110,7 +122,7 @@ def count_cfg_edges(func):
             while dests.hasNext() and not getMonitor().isCancelled():
                 _ = dests.next()
                 edges += 1
-        except:
+        except Exception:
             pass
     return edges
 
@@ -118,7 +130,7 @@ def count_cfg_edges(func):
 def local_var_count(func):
     try:
         return len(func.getLocalVariables())
-    except:
+    except Exception:
         return 0
 
 
@@ -147,6 +159,7 @@ def scan_function_calls_and_syscall(func):
 
     return called, has_sys
 
+
 def write_jsonl_atomic(path, obj_dict):
     p = Paths.get(path)
     parent = p.getParent()
@@ -155,10 +168,7 @@ def write_jsonl_atomic(path, obj_dict):
 
     data = (json.dumps(obj_dict) + "\n").encode("utf-8")
 
-    channel = FileChannel.open(
-        p,
-        StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.APPEND
-    )
+    channel = FileChannel.open(p, StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.APPEND)
     try:
         lock = channel.lock()
         try:
@@ -205,7 +215,7 @@ for func in fm.getFunctions(True):
             syscall_func_count += 1
 
     except Exception as e:
-        print("[!] Function error in {}: {}".format(func.getName(), e))
+        print(f"[!] Function error in {func.getName()}: {e}")
 
 record = {
     "ios_version": ios_version,
@@ -219,4 +229,4 @@ record = {
 }
 
 write_jsonl_atomic(outpath, record)
-print("[+] Wrote metrics for {} -> {}".format(binary_name, outpath))
+print(f"[+] Wrote metrics for {binary_name} -> {outpath}")
