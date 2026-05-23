@@ -21,7 +21,7 @@ DEFAULT_HLA_METRIC_KEY = "num_symbols"
 HLA_LIBRARY_LABEL = "file"
 HLA_TITLE = "Evolution of libraries across iOS versions: High level analysis"
 
-HLA_OUTPUT_FILE_NAME = DOCS_DIR / "high_level_analysis_dylib_evolution.html"
+HLA_PLOT_OUTPUT = DOCS_DIR / "high_level_analysis_dylib_evolution.html"
 
 HLA_WEIGHTS = {
     "num_exported_functions": 1.0,
