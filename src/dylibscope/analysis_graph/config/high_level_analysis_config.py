@@ -1,7 +1,7 @@
 from pandas import DataFrame
 
 from dylibscope.analysis_graph.models import AnalysisConfig, SecurityProfile
-from dylibscope.config.paths import DOCS_DIR, PACKAGE_DIR
+from dylibscope.config.paths import DOCS_DIR
 
 
 def hla_preprocess(df: DataFrame):
@@ -21,7 +21,6 @@ DEFAULT_HLA_METRIC_KEY = "num_symbols"
 HLA_LIBRARY_LABEL = "file"
 HLA_TITLE = "Evolution of libraries across iOS versions: High level analysis"
 
-HLA_INPUT_FILE_PATH = PACKAGE_DIR / "high_level_analysis" / "dylibs_analysis_local.json"
 HLA_OUTPUT_FILE_NAME = DOCS_DIR / "high_level_analysis_dylib_evolution.html"
 
 HLA_WEIGHTS = {

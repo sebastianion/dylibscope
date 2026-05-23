@@ -3,8 +3,6 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from dylibscope.config.paths import PACKAGE_DIR
-
 RISK_METRICS = ["cfg_edge_count", "allocation_call_count", "mach_port_function_count", "syscall_function_count"]
 ALL_METRICS = RISK_METRICS + ["internal_function_count", "internal_variable_count"]
 
@@ -23,8 +21,6 @@ THR_RAW_RISK = 0.03
 THR_CFG = 0.05
 THR_ALLOC = 0.05
 THR_BOUNDARY = 0.05
-
-DEFAULT_LLA_INPUT = PACKAGE_DIR / "low_level_analysis" / "ghidra_out" / "merged.json"
 
 
 @dataclass

@@ -5,13 +5,13 @@ from pathlib import Path
 
 import pandas as pd
 
+from dylibscope.config.datasets import LLA_INPUT
 from dylibscope.config.io import load_jsonl
 from dylibscope.config.ios_versions import VERSION_ORDER
 from dylibscope.config.versioning import normalize_version_label
 from dylibscope.security_analysis.utils.common_utils import lib_base, norm01, pct_change, pick_col, to_int
 from dylibscope.security_analysis.utils.lla_utils import (
     ALL_METRICS,
-    DEFAULT_LLA_INPUT,
     MIN_COMMON,
     MIN_LIBS_FOR_VERSION,
     MIN_OVERLAP,
@@ -242,7 +242,7 @@ def build_lla_trend_rows(
 
 
 def run_lla_trend_analysis(
-    input_path: str | Path = DEFAULT_LLA_INPUT,
+    input_path: str | Path = LLA_INPUT,
     topk: int = 20,
     print_report: bool = True,
 ) -> list[TrendReportRow]:
@@ -263,7 +263,7 @@ def parse_args() -> argparse.Namespace:
         "--in",
         dest="input_path",
         type=Path,
-        default=DEFAULT_LLA_INPUT,
+        default=LLA_INPUT,
         help="Path to the low-level JSONL dataset.",
     )
 

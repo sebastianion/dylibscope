@@ -3,7 +3,6 @@ from __future__ import annotations
 import math
 
 from dylibscope.security_analysis.utils.hla_utils import (
-    DEFAULT_HLA_INPUT,
     HL_METRICS,
     MIN_COMMON,
     MIN_LIBS_FOR_VERSION,
@@ -23,7 +22,7 @@ from dylibscope.security_analysis.utils.hla_utils import (
     format_optional_percent,
     raw_risk_row,
 )
-
+from dylibscope.config.datasets import HLA_INPUT
 
 def test_hla_constants_preserve_expected_values():
     assert HL_METRICS == ["num_symbols", "import_count", "num_sections"]
@@ -40,7 +39,7 @@ def test_hla_constants_preserve_expected_values():
     assert THR_SYMS == 0.07
     assert THR_IMPS == 0.07
     assert THR_SECS == 0.07
-    assert DEFAULT_HLA_INPUT.name == "dylibs_analysis_local.json"
+    assert HLA_INPUT.name == "dylibs_analysis_local.json"
 
 
 def test_raw_risk_row_uses_expected_weighted_log_formula():

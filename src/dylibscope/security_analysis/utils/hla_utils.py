@@ -3,8 +3,6 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from dylibscope.config.paths import PACKAGE_DIR
-
 HL_METRICS = ["num_symbols", "import_count", "num_sections"]
 
 W_RAW = {
@@ -23,8 +21,6 @@ THR_RAW_RISK = 0.01
 THR_SYMS = 0.07
 THR_IMPS = 0.07
 THR_SECS = 0.07
-
-DEFAULT_HLA_INPUT = PACKAGE_DIR / "high_level_analysis" / "dylibs_analysis_local.json"
 
 
 @dataclass

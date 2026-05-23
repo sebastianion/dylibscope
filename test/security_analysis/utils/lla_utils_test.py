@@ -4,7 +4,6 @@ import math
 
 from dylibscope.security_analysis.utils.lla_utils import (
     ALL_METRICS,
-    DEFAULT_LLA_INPUT,
     MIN_COMMON,
     MIN_LIBS_FOR_VERSION,
     MIN_OVERLAP,
@@ -23,6 +22,7 @@ from dylibscope.security_analysis.utils.lla_utils import (
     format_optional_percent,
     raw_risk_lib,
 )
+from dylibscope.config.datasets import LLA_INPUT
 
 
 def test_lla_constants_preserve_expected_values():
@@ -49,7 +49,7 @@ def test_lla_constants_preserve_expected_values():
     assert THR_CFG == 0.05
     assert THR_ALLOC == 0.05
     assert THR_BOUNDARY == 0.05
-    assert DEFAULT_LLA_INPUT.name == "merged.json"
+    assert LLA_INPUT.name == "merged.json"
 
 
 def test_raw_risk_lib_uses_expected_weighted_log_formula():
