@@ -17,7 +17,7 @@ from dylibscope.security_analysis.utils.common_utils import (
     pick_col,
     to_int,
 )
-from dylibscope.security_analysis.utils.hla_utils import (
+from dylibscope.security_analysis.profiles.high_level_analysis import (
     HL_METRICS,
     MIN_COMMON,
     MIN_LIBS_FOR_VERSION,

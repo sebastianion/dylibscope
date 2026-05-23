@@ -1,5 +1,5 @@
-from dylibscope.analysis_graph.config.high_level_analysis_config import HLA, HLA_PLOT_OUTPUT
-from dylibscope.analysis_graph.config.low_level_analysis_config import LLA, LLA_PLOT_OUTPUT
+from dylibscope.analysis_graph.plot_presets.high_level_analysis import HLA, HLA_PLOT_OUTPUT
+from dylibscope.analysis_graph.plot_presets.low_level_analysis import LLA, LLA_PLOT_OUTPUT
 from dylibscope.analysis_graph.plot_graph import Graph
 from dylibscope.config.datasets import HLA_INPUT, LLA_INPUT
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 
-from dylibscope.security_analysis.utils.hla_utils import (
+from dylibscope.security_analysis.profiles.high_level_analysis import (
     HL_METRICS,
     MIN_COMMON,
     MIN_LIBS_FOR_VERSION,
