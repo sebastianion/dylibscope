@@ -13,10 +13,3 @@ class AnalysisConfig:
     library_label: str
     title: str
     preprocess: Callable[[DataFrame], DataFrame] | None = None
-
-
-@dataclass(frozen=True)
-class SecurityProfile:
-    name: str
-    weights: dict[str, float]
-    security_lens: dict[str, str]

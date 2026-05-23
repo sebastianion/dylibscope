@@ -1,6 +1,6 @@
 from pandas import DataFrame
 
-from dylibscope.analysis_graph.models import AnalysisConfig, SecurityProfile
+from dylibscope.analysis_graph.models import AnalysisConfig
 from dylibscope.config.paths import DOCS_DIR
 
 
@@ -23,20 +23,6 @@ HLA_TITLE = "Evolution of libraries across iOS versions: High level analysis"
 
 HLA_PLOT_OUTPUT = DOCS_DIR / "high_level_analysis_dylib_evolution.html"
 
-HLA_WEIGHTS = {
-    "num_exported_functions": 1.0,
-    "num_imported_functions": 0.8,
-    "num_symbols": 0.5,
-    "num_sections": 0.3,
-}
-
-HLA_SECURITY_LENS = {
-    "num_exported_functions": "Exports ↑ ⇒ broader public API surface (more entry points / hookable interfaces).",
-    "num_imported_functions": "Imports ↑ ⇒ dependency footprint expands (more transitive risk and ABI surface).",
-    "num_symbols": "Symbols ↑ ⇒ greater RE visibility unless stripped; can correlate with feature growth.",
-    "num_sections": "Sections ↑ ⇒ structural complexity increases; can indicate added components/features.",
-}
-
 HLA = AnalysisConfig(
     metrics=HLA_METRICS,
     default_metric_label=DEFAULT_HLA_METRIC_KEY,
@@ -44,5 +30,3 @@ HLA = AnalysisConfig(
     title=HLA_TITLE,
     preprocess=hla_preprocess,
 )
-
-HLA_SECURITY = SecurityProfile(name="hla", weights=HLA_WEIGHTS, security_lens=HLA_SECURITY_LENS)
