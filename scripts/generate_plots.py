@@ -1,16 +1,14 @@
 import argparse
 from pathlib import Path
 
+from dylibscope.analysis_graph.plot_graph import Graph
 from dylibscope.analysis_graph.plot_presets.high_level_analysis import HLA, HLA_PLOT_OUTPUT
 from dylibscope.analysis_graph.plot_presets.low_level_analysis import LLA, LLA_PLOT_OUTPUT
-from dylibscope.analysis_graph.plot_graph import Graph
 from dylibscope.config.datasets import HLA_INPUT, LLA_INPUT
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Generate DylibScope interactive Plotly graphs."
-    )
+    parser = argparse.ArgumentParser(description="Generate DylibScope interactive Plotly graphs.")
     parser.add_argument(
         "--hla-input",
         type=Path,

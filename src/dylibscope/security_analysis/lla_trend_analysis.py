@@ -9,7 +9,6 @@ from dylibscope.config.datasets import LLA_INPUT
 from dylibscope.config.io import load_jsonl
 from dylibscope.config.ios_versions import VERSION_ORDER
 from dylibscope.config.versioning import normalize_version_label
-from dylibscope.security_analysis.utils.common_utils import lib_base, norm01, pct_change, pick_col, to_int
 from dylibscope.security_analysis.profiles.low_level_analysis import (
     ALL_METRICS,
     MIN_COMMON,
@@ -22,6 +21,7 @@ from dylibscope.security_analysis.profiles.low_level_analysis import (
     format_lla_report,
     raw_risk_lib,
 )
+from dylibscope.security_analysis.utils.common_utils import lib_base, norm01, pct_change, pick_col, to_int
 
 
 def load_and_prepare_lla_data(input_path: str | Path) -> pd.DataFrame:

@@ -1,15 +1,13 @@
 import argparse
 from pathlib import Path
 
+from dylibscope.config.datasets import HLA_INPUT, LLA_INPUT
 from dylibscope.security_analysis.hla_trend_analysis import run_hla_trend_analysis
 from dylibscope.security_analysis.lla_trend_analysis import run_lla_trend_analysis
-from dylibscope.config.datasets import HLA_INPUT, LLA_INPUT
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Generate DylibScope security trend reports."
-    )
+    parser = argparse.ArgumentParser(description="Generate DylibScope security trend reports.")
     parser.add_argument(
         "--hla-input",
         type=Path,
@@ -23,7 +21,6 @@ def parse_args() -> argparse.Namespace:
         help="Path to the low-level JSONL dataset.",
     )
     return parser.parse_args()
-
 
 
 def main() -> None:

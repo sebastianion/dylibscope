@@ -9,14 +9,6 @@ from dylibscope.config.datasets import HLA_INPUT
 from dylibscope.config.io import load_jsonl
 from dylibscope.config.ios_versions import VERSION_ORDER
 from dylibscope.config.versioning import normalize_version_label
-from dylibscope.security_analysis.utils.common_utils import (
-    count_semicolon_list,
-    lib_base,
-    norm01,
-    pct_change,
-    pick_col,
-    to_int,
-)
 from dylibscope.security_analysis.profiles.high_level_analysis import (
     HL_METRICS,
     MIN_COMMON,
@@ -27,6 +19,14 @@ from dylibscope.security_analysis.profiles.high_level_analysis import (
     classify,
     format_hla_report,
     raw_risk_row,
+)
+from dylibscope.security_analysis.utils.common_utils import (
+    count_semicolon_list,
+    lib_base,
+    norm01,
+    pct_change,
+    pick_col,
+    to_int,
 )
 
 
