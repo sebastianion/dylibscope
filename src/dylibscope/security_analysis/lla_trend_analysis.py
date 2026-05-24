@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from dylibscope.config.datasets import LLA_INPUT
+from dylibscope.config.datasets import LLA_DATASET
 from dylibscope.config.io import load_jsonl
 from dylibscope.config.ios_versions import VERSION_ORDER
 from dylibscope.config.versioning import normalize_version_label
@@ -242,7 +242,7 @@ def build_lla_trend_rows(
 
 
 def run_lla_trend_analysis(
-    input_path: str | Path = LLA_INPUT,
+    input_path: str | Path = LLA_DATASET,
     topk: int = 20,
     print_report: bool = True,
 ) -> list[TrendReportRow]:
@@ -263,7 +263,7 @@ def parse_args() -> argparse.Namespace:
         "--in",
         dest="input_path",
         type=Path,
-        default=LLA_INPUT,
+        default=LLA_DATASET,
         help="Path to the low-level JSONL dataset.",
     )
 

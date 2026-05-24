@@ -22,7 +22,7 @@ from dylibscope.security_analysis.profiles.low_level_analysis import (
     format_optional_percent,
     raw_risk_lib,
 )
-from dylibscope.config.datasets import LLA_INPUT
+from dylibscope.config.datasets import LLA_DATASET
 
 
 def test_lla_constants_preserve_expected_values():
@@ -49,7 +49,7 @@ def test_lla_constants_preserve_expected_values():
     assert THR_CFG == 0.05
     assert THR_ALLOC == 0.05
     assert THR_BOUNDARY == 0.05
-    assert LLA_INPUT.name == "merged.json"
+    assert LLA_DATASET.name == "merged.json"
 
 
 def test_raw_risk_lib_uses_expected_weighted_log_formula():

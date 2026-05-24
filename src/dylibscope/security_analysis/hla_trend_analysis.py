@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from dylibscope.config.datasets import HLA_INPUT
+from dylibscope.config.datasets import HLA_DATASET
 from dylibscope.config.io import load_jsonl
 from dylibscope.config.ios_versions import VERSION_ORDER
 from dylibscope.config.versioning import normalize_version_label
@@ -247,7 +247,7 @@ def build_hla_trend_rows(
 
 
 def run_hla_trend_analysis(
-    input_path: str | Path = HLA_INPUT,
+    input_path: str | Path = HLA_DATASET,
     topk: int = 20,
     print_report: bool = True,
 ) -> list[HlaTrendReportRow]:
@@ -268,7 +268,7 @@ def parse_args() -> argparse.Namespace:
         "--in",
         dest="input_path",
         type=Path,
-        default=HLA_INPUT,
+        default=HLA_DATASET,
         help="Path to the high-level JSONL dataset.",
     )
 

@@ -4,7 +4,7 @@ from pathlib import Path
 from dylibscope.analysis_graph.plot_graph import Graph
 from dylibscope.analysis_graph.plot_presets.high_level_analysis import HLA, HLA_PLOT_OUTPUT
 from dylibscope.analysis_graph.plot_presets.low_level_analysis import LLA, LLA_PLOT_OUTPUT
-from dylibscope.config.datasets import HLA_INPUT, LLA_INPUT
+from dylibscope.config.datasets import HLA_DATASET, LLA_DATASET
 
 
 def parse_args() -> argparse.Namespace:
@@ -12,13 +12,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--hla-input",
         type=Path,
-        default=HLA_INPUT,
+        default=HLA_DATASET,
         help="Path to the high-level JSONL dataset.",
     )
     parser.add_argument(
         "--lla-input",
         type=Path,
-        default=LLA_INPUT,
+        default=LLA_DATASET,
         help="Path to the low-level JSONL dataset.",
     )
     parser.add_argument(
