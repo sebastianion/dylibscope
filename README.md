@@ -196,6 +196,144 @@ The reports compare consecutive iOS versions using common-library overlap and me
 
 These labels are heuristic and should be interpreted as triage signals, not vulnerability claims.
 
+## Normalized SQLite Storage
+
+After the high-level and low-level JSONL datasets have been generated, DylibScope can import them into a normalized SQLite database. This provides a local query backend for library metrics and prepares the project for the future client API.
+
+
+The storage layer normalizes:
+
+* datasets
+* iOS firmware labels
+* library names
+* high-level metrics
+* low-level metrics
+* library observations across iOS versions
+
+The importer stores both the full firmware label and parsed version fields. For example:
+
+```text
+iPhone11,8_12.0_16A366
+```
+
+is stored as:
+
+```text
+device_model  = iPhone11,8
+ios_release   = 12.0
+build_number  = 16A366
+```
+
+This allows queries by either the full firmware label or only the iOS release.
+
+### Import JSONL datasets into SQLite
+
+From the repository root:
+
+```bash
+python scripts/import_datasets.py \
+  --db data/dylibscope.sqlite \
+  --dataset-name public-baseline \
+  --hla-input src/dylibscope/high_level_analysis/dylibs_analysis_local.json \
+  --lla-input src/dylibscope/low_level_analysis/ghidra_out/merged.json
+```
+
+This creates the SQLite database at:
+
+```text
+data/dylibscope.sqlite
+```
+
+If the `data/` directory does not exist, it is created automatically.
+
+The generated SQLite database is a local artifact and should normally not be committed.
+
+### Query metrics from the SQLite database
+
+Query all high-level metrics for a library in a specific iOS release:
+
+```bash
+python scripts/query_metrics.py libsqlite3.0.dylib \
+  --db data/dylibscope.sqlite \
+  --dataset-name public-baseline \
+  --ios-version 6.0 \
+  --level high
+```
+
+Query low-level metrics for a library:
+
+```bash
+python scripts/query_metrics.py libSimplifiedChineseConverter.dylib \
+  --db data/dylibscope.sqlite \
+  --dataset-name public-baseline \
+  --ios-version 12.0 \
+  --level low
+```
+
+Query using the full firmware label:
+
+```bash
+python scripts/query_metrics.py libSimplifiedChineseConverter.dylib \
+  --db data/dylibscope.sqlite \
+  --dataset-name public-baseline \
+  --ios-version iPhone11,8_12.0_16A366 \
+  --level low
+```
+
+Query one exact metric without specifying whether it is high-level or low-level:
+
+```bash
+python scripts/query_metrics.py libsqlite3.0.dylib \
+  --db data/dylibscope.sqlite \
+  --dataset-name public-baseline \
+  --metric imported_function_count
+```
+
+Query all available metrics for a library across every iOS version in which it appears:
+
+```bash
+python scripts/query_metrics.py libsqlite3.0.dylib \
+  --db data/dylibscope.sqlite \
+  --dataset-name public-baseline
+```
+
+### SQLite inspection
+
+Inspect the generated database manually:
+
+```bash
+sqlite3 data/dylibscope.sqlite ".tables"
+```
+
+Useful sanity checks:
+
+```sql
+SELECT COUNT(*) FROM libraries;
+SELECT COUNT(*) FROM ios_versions;
+SELECT COUNT(*) FROM library_observations;
+SELECT COUNT(*) FROM metric_values;
+SELECT COUNT(*) FROM import_errors;
+```
+
+Check parsed iOS version labels:
+
+```sql
+SELECT version_label, device_model, ios_release, build_number
+FROM ios_versions
+LIMIT 10;
+```
+
+Check import errors:
+
+```sql
+SELECT *
+FROM import_errors
+LIMIT 20;
+```
+
+Ideally, the `import_errors` table should be empty. If it is not empty, inspect the rows to identify malformed or incomplete JSONL records.
+
+
 ## GitHub Pages Dashboard
 
 The public dashboard is served from the `docs/` directory.
