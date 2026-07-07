@@ -45,14 +45,19 @@ dylibscope/
 ├── src/
 │   └── dylibscope/
 │       ├── analysis_graph/        # Plot generation logic
-│       ├── config/                # Shared global configuraion
+│       ├── api/                   # FastAPI client API for stored metrics
+│       ├── config/                # Shared global configuration
 │       ├── high_level_analysis/   # LIEF-based extraction
 │       ├── low_level_analysis/    # Ghidra/Jython extraction
-│       └── security_analysis/     # Trend reports and heuristic scoring
-├── tests/                         # Unit tests
+│       ├── security_analysis/     # Trend reports and heuristic scoring
+│       └── storage/               # Normalized SQLite schema, import, and query helpers
+├── tests/                         # Unit and API tests
+│   ├── api/                       # API endpoint tests
+│   └── storage/                   # Storage/import tests
 ├── pyproject.toml
 └── README.md
 ```
+
 
 ## Requirements
 
