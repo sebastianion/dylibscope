@@ -333,6 +333,101 @@ LIMIT 20;
 
 Ideally, the `import_errors` table should be empty. If it is not empty, inspect the rows to identify malformed or incomplete JSONL records.
 
+## Client API
+
+DylibScope provides a local FastAPI-based client API for querying the normalized SQLite database. The API reads already-generated metrics from SQLite; it does not run LIEF or Ghidra during requests.
+
+### Start the API
+
+Install API dependencies:
+
+```bash
+python -m pip install fastapi uvicorn
+```
+
+Create the SQLite database:
+
+```bash
+python scripts/import_datasets.py \
+  --db data/dylibscope.sqlite \
+  --dataset-name public-baseline \
+  --hla-input src/dylibscope/high_level_analysis/dylibs_analysis_local.json \
+  --lla-input src/dylibscope/low_level_analysis/ghidra_out/merged.json
+```
+
+Run the API:
+
+```bash
+python scripts/run_api.py --db data/dylibscope.sqlite
+```
+
+Interactive documentation is available at:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+### Main endpoints
+
+```http
+GET /health
+GET /v1/libraries
+GET /v1/ios-versions
+GET /v1/libraries/{library_name}/metrics
+GET /v1/libraries/{library_name}/timeline
+POST /v1/libraries/compare
+POST /v1/libraries/{library_name}/compare-versions
+```
+
+### Example requests
+
+Query high-level metrics for one library:
+
+```bash
+curl "http://127.0.0.1:8000/v1/libraries/libsqlite3.0.dylib/metrics?dataset_name=public-baseline&ios_version=6.0&level=high"
+```
+
+Query exact metrics without specifying high-level or low-level analysis:
+
+```bash
+curl "http://127.0.0.1:8000/v1/libraries/libsqlite3.0.dylib/metrics?dataset_name=public-baseline&metrics=num_symbols,imported_function_count"
+```
+
+Compare two libraries in the same iOS scope:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/v1/libraries/compare" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "libraries": ["libsqlite3.0.dylib", "libresolv.dylib"],
+    "dataset_name": "public-baseline",
+    "ios_version": "6.0",
+    "metrics": ["num_symbols", "imported_function_count"]
+  }'
+```
+
+Compare the same library across iOS versions:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/v1/libraries/libsqlite3.0.dylib/compare-versions" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "dataset_name": "public-baseline",
+    "ios_versions": ["6.0", "7.0"],
+    "metrics": ["num_symbols", "imported_function_count"]
+  }'
+```
+
+The comparison endpoints return `resolved_observations`, missing entries, and metric-level `results` with differences or deltas.
+
+### API tests
+
+```bash
+pytest tests/api/test_metrics_api.py -v
+pytest -v
+```
+
+The API exposes static metrics and heuristic comparisons. Higher values may indicate larger static complexity or interface surface, but they do not prove vulnerabilities.
 
 ## GitHub Pages Dashboard
 
