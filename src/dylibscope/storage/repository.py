@@ -136,3 +136,80 @@ def get_library_metrics(
         }
 
     return list(grouped.values())
+
+
+def list_observations_for_ios_version(
+    conn: sqlite3.Connection,
+    ios_version: str,
+    dataset_name: Optional[str] = None,
+    level: Optional[str] = None,
+    metrics: Optional[Iterable[str]] = None,
+) -> List[Dict[str, Any]]:
+    """Return all library observations for one iOS version or release.
+
+    ``ios_version`` accepts either a full firmware label such as
+    ``iPhone11,8_12.0_16A366`` or a parsed release such as ``12.0``.
+    """
+    metric_list = list(metrics or [])
+    conditions = ["(iv.version_label = ? OR iv.ios_release = ?)"]
+    params: list[Any] = [ios_version, ios_version]
+
+    if dataset_name:
+        conditions.append("d.name = ?")
+        params.append(dataset_name)
+
+    if level and level != "all":
+        conditions.append("md.level = ?")
+        params.append(level)
+
+    if metric_list:
+        placeholders = ",".join("?" for _ in metric_list)
+        conditions.append(f"mv.metric_name IN ({placeholders})")
+        params.extend(metric_list)
+
+    where_clause = " AND ".join(conditions)
+    rows = conn.execute(
+        f"""
+        SELECT
+            d.name AS dataset_name,
+            l.display_name AS library,
+            iv.version_label AS ios_version,
+            iv.device_model,
+            iv.ios_release,
+            iv.build_number,
+            mv.metric_name,
+            md.level,
+            mv.numeric_value,
+            mv.text_value,
+            mv.json_value
+        FROM metric_values mv
+        JOIN metric_definitions md ON md.name = mv.metric_name
+        JOIN library_observations o ON o.id = mv.observation_id
+        JOIN datasets d ON d.id = o.dataset_id
+        JOIN libraries l ON l.id = o.library_id
+        JOIN ios_versions iv ON iv.id = o.ios_version_id
+        WHERE {where_clause}
+        ORDER BY l.display_name, iv.ios_release, iv.build_number, iv.version_label, md.level, mv.metric_name
+        """,
+        params,
+    ).fetchall()
+
+    grouped: Dict[tuple[str, str, str], Dict[str, Any]] = {}
+    for row in rows:
+        key = (row["dataset_name"], row["library"], row["ios_version"])
+        if key not in grouped:
+            grouped[key] = {
+                "dataset": row["dataset_name"],
+                "library": row["library"],
+                "ios_version": row["ios_version"],
+                "device_model": row["device_model"],
+                "ios_release": row["ios_release"],
+                "build_number": row["build_number"],
+                "metrics": {},
+            }
+        grouped[key]["metrics"][row["metric_name"]] = {
+            "level": row["level"],
+            "value": _coerce_metric_value(row),
+        }
+
+    return list(grouped.values())

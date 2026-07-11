@@ -8,7 +8,19 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 
 from dylibscope.api.config import resolve_db_path
-from dylibscope.storage.repository import get_library_metrics, list_ios_versions, list_libraries
+from dylibscope.security_analysis.derived_scoring import (
+    INTERPRETATION_NOTE,
+    build_library_security_report,
+    build_version_security_summary,
+    compare_observation_scores,
+    score_observation,
+)
+from dylibscope.storage.repository import (
+    get_library_metrics,
+    list_ios_versions,
+    list_libraries,
+    list_observations_for_ios_version,
+)
 from dylibscope.storage.schema import connect
 
 MetricLevel = Literal["high", "low", "all"]
@@ -279,6 +291,42 @@ def create_app(db_path: Optional[Union[str, Path]] = None) -> FastAPI:
         versions = list_ios_versions(conn)
         return {"count": len(versions), "ios_versions": versions}
 
+    @app.get("/v1/ios-versions/{ios_version}/security-summary", responses={404: {"model": ErrorResponse}})
+    def api_get_ios_version_security_summary(
+        ios_version: str,
+        dataset_name: Optional[str] = Query(default="public-baseline"),
+        level: Optional[MetricLevel] = Query(default=None),
+        metric: Optional[List[str]] = Query(default=None, description="Repeatable exact metric filter."),
+        metrics: Optional[str] = Query(default=None, description="Comma-separated exact metric filter."),
+        limit: int = Query(default=10, ge=1, le=50, description="Maximum number of top libraries to return."),
+        conn: sqlite3.Connection = Depends(get_conn),
+    ) -> Dict[str, Any]:
+        selected_metrics = _parse_metric_filters(metric, metrics)
+        observations = list_observations_for_ios_version(
+            conn,
+            ios_version=ios_version,
+            dataset_name=dataset_name,
+            level=level,
+            metrics=selected_metrics,
+        )
+        if not observations:
+            raise HTTPException(status_code=404, detail="No metrics found for the requested iOS version filter.")
+
+        summary = build_version_security_summary(
+            ios_version=ios_version,
+            observations=observations,
+            metric_filter=selected_metrics,
+            top_limit=limit,
+        )
+        summary.update(
+            {
+                "dataset_name": dataset_name,
+                "level_filter": level,
+                "metric_filter": selected_metrics,
+            }
+        )
+        return summary
+
     @app.get("/v1/libraries/{library_name}/metrics", responses={404: {"model": ErrorResponse}})
     def api_get_library_metrics(
         library_name: str,
@@ -338,6 +386,105 @@ def create_app(db_path: Optional[Union[str, Path]] = None) -> FastAPI:
             "count": len(observations),
             "timeline": observations,
         }
+
+    @app.get("/v1/libraries/{library_name}/security-report", responses={404: {"model": ErrorResponse}})
+    def api_get_library_security_report(
+        library_name: str,
+        dataset_name: Optional[str] = Query(default="public-baseline"),
+        ios_version: Optional[str] = Query(default=None, description="Full firmware label or parsed iOS release."),
+        from_ios_version: Optional[str] = Query(default=None, description="Start version for a transition report."),
+        to_ios_version: Optional[str] = Query(default=None, description="End version for a transition report."),
+        level: Optional[MetricLevel] = Query(default=None),
+        metric: Optional[List[str]] = Query(default=None, description="Repeatable exact metric filter."),
+        metrics: Optional[str] = Query(default=None, description="Comma-separated exact metric filter."),
+        conn: sqlite3.Connection = Depends(get_conn),
+    ) -> Dict[str, Any]:
+        selected_metrics = _parse_metric_filters(metric, metrics)
+
+        if bool(from_ios_version) != bool(to_ios_version):
+            raise HTTPException(
+                status_code=400,
+                detail="Both from_ios_version and to_ios_version are required for a transition report.",
+            )
+
+        if from_ios_version and to_ios_version:
+            from_observations = get_library_metrics(
+                conn,
+                library_name=library_name,
+                dataset_name=dataset_name,
+                ios_version=from_ios_version,
+                level=level,
+                metrics=selected_metrics,
+            )
+            to_observations = get_library_metrics(
+                conn,
+                library_name=library_name,
+                dataset_name=dataset_name,
+                ios_version=to_ios_version,
+                level=level,
+                metrics=selected_metrics,
+            )
+            from_observation = _first_observation_for_scope(from_observations)
+            to_observation = _first_observation_for_scope(to_observations)
+            if not from_observation or not to_observation:
+                raise HTTPException(status_code=404, detail="Metrics were not found for both requested transition endpoints.")
+
+            return {
+                "report_type": "library_transition_security_report",
+                "library": library_name,
+                "dataset_name": dataset_name,
+                "from_ios_version_filter": from_ios_version,
+                "to_ios_version_filter": to_ios_version,
+                "level_filter": level,
+                "metric_filter": selected_metrics,
+                "scoring_basis": "weighted_static_metric_score",
+                "interpretation_note": INTERPRETATION_NOTE,
+                "resolved_observations": [
+                    {
+                        "requested_ios_version": from_ios_version,
+                        "matched_observation_count": len(from_observations),
+                        "selected_ios_version": from_observation.get("ios_version"),
+                        "selected_ios_release": from_observation.get("ios_release"),
+                        "selected_build_number": from_observation.get("build_number"),
+                    },
+                    {
+                        "requested_ios_version": to_ios_version,
+                        "matched_observation_count": len(to_observations),
+                        "selected_ios_version": to_observation.get("ios_version"),
+                        "selected_ios_release": to_observation.get("ios_release"),
+                        "selected_build_number": to_observation.get("build_number"),
+                    },
+                ],
+                "from_score": score_observation(from_observation, metric_filter=selected_metrics),
+                "to_score": score_observation(to_observation, metric_filter=selected_metrics),
+                "trend": compare_observation_scores(from_observation, to_observation, metric_filter=selected_metrics),
+            }
+
+        observations = get_library_metrics(
+            conn,
+            library_name=library_name,
+            dataset_name=dataset_name,
+            ios_version=ios_version,
+            level=level,
+            metrics=selected_metrics,
+        )
+        if not observations:
+            raise HTTPException(status_code=404, detail="No metrics found for the requested security report filters.")
+
+        report = build_library_security_report(
+            library_name=library_name,
+            observations=observations,
+            metric_filter=selected_metrics,
+        )
+        report.update(
+            {
+                "dataset_name": dataset_name,
+                "ios_version_filter": ios_version,
+                "level_filter": level,
+                "metric_filter": selected_metrics,
+            }
+        )
+        return report
 
     @app.post("/v1/libraries/compare", responses={404: {"model": ErrorResponse}})
     def api_compare_libraries(

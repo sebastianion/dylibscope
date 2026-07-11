@@ -21,7 +21,10 @@ LLA_NUMERIC_FIELDS = {
 }
 
 IOS_VERSION_LABEL_RE = re.compile(
-    r"^(?P<device>[^_]+)_(?P<release>\d+(?:\.\d+){0,2})_(?P<build>[A-Za-z0-9]+)$"
+    # Device labels may contain underscores, for example:
+    # iPhone_4.0_64bit_10.3.3_14G60
+    # Parse from the right: <device>_<ios_release>_<build>.
+    r"^(?P<device>.+)_(?P<release>\d+(?:\.\d+){0,2})_(?P<build>[A-Za-z0-9]+)$"
 )
 
 
@@ -29,7 +32,8 @@ IOS_VERSION_LABEL_RE = re.compile(
 class ParsedIOSVersion:
     """Parsed representation of a DylibScope firmware/iOS label.
 
-    Current datasets use labels such as ``iPhone11,8_12.0_16A366``.
+    Current datasets use labels such as ``iPhone11,8_12.0_16A366`` and
+    ``iPhone_4.0_64bit_10.3.3_14G60``.
     For the API layer we need both the full firmware label and the user-facing
     iOS release such as ``12.0``.
     """
@@ -97,7 +101,8 @@ def ios_version_label(record: Dict[str, Any]) -> str:
 
 
 def parse_ios_version_label(value: str) -> ParsedIOSVersion:
-    """Parse labels like ``iPhone11,8_12.0_16A366`` when possible.
+    """Parse labels like ``iPhone11,8_12.0_16A366`` or
+    ``iPhone_4.0_64bit_10.3.3_14G60`` when possible.
 
     If the label does not match the known firmware pattern, keep it as the full
     label and leave the parsed fields empty. This keeps the importer tolerant of
