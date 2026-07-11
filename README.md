@@ -45,14 +45,15 @@ dylibscope/
 ├── src/
 │   └── dylibscope/
 │       ├── analysis_graph/        # Plot generation logic
-│       ├── api/                   # FastAPI client API for stored metrics
+│       ├── api/                   # FastAPI client API for stored metrics and reports
 │       ├── config/                # Shared global configuration
 │       ├── high_level_analysis/   # LIEF-based extraction
 │       ├── low_level_analysis/    # Ghidra/Jython extraction
-│       ├── security_analysis/     # Trend reports and heuristic scoring
+│       ├── security_analysis/     # Trend reports, heuristic scoring, and derived reports
 │       └── storage/               # Normalized SQLite schema, import, and query helpers
-├── tests/                         # Unit and API tests
+├── test/                          # Unit, storage, and API tests
 │   ├── api/                       # API endpoint tests
+│   ├── security_analysis/         # Derived scoring tests
 │   └── storage/                   # Storage/import tests
 ├── pyproject.toml
 └── README.md
@@ -382,6 +383,8 @@ GET /v1/libraries/{library_name}/metrics
 GET /v1/libraries/{library_name}/timeline
 POST /v1/libraries/compare
 POST /v1/libraries/{library_name}/compare-versions
+GET /v1/libraries/{library_name}/security-report
+GET /v1/ios-versions/{ios_version}/security-summary
 ```
 
 ### Example requests
@@ -425,10 +428,36 @@ curl -X POST "http://127.0.0.1:8000/v1/libraries/libsqlite3.0.dylib/compare-vers
 
 The comparison endpoints return `resolved_observations`, missing entries, and metric-level `results` with differences or deltas.
 
+### Security report endpoints
+
+Generate a heuristic static security report for one library:
+
+```bash
+curl "http://127.0.0.1:8000/v1/libraries/libsqlite3.0.dylib/security-report?dataset_name=public-baseline&ios_version=6.0"
+```
+
+Compare the same library between two iOS versions:
+
+```bash
+curl "http://127.0.0.1:8000/v1/libraries/libsqlite3.0.dylib/security-report?dataset_name=public-baseline&from_ios_version=6.0&to_ios_version=7.0"
+```
+
+Generate a version-level static security summary:
+
+```bash
+curl "http://127.0.0.1:8000/v1/ios-versions/10.3.3/security-summary?dataset_name=public-baseline&limit=10"
+```
+
+These endpoints use the existing DylibScope security-analysis profile weights and return heuristic static-complexity indicators, not vulnerability proof.
+
 ### API tests
 
 ```bash
-pytest tests/api/test_metrics_api.py -v
+pytest test/storage/storage_import_test.py -v
+pytest test/storage/ios_version_parser_test.py -v
+pytest test/api/metrics_api_test.py -v
+pytest test/api/security_report_api_test.py -v
+pytest test/security_analysis/derived_scoring_test.py -v
 pytest -v
 ```
 
@@ -460,18 +489,39 @@ pytest
 Run linting and formatting:
 
 ```bash
-ruff check src scripts tests --fix
-ruff format src scripts tests
+ruff check src scripts test --fix
+ruff format src scripts test
 ```
 
 Recommended validation before submission:
 
 ```bash
-ruff check src scripts tests
+ruff check src scripts test
 pytest
 python -m compileall src
 python scripts/generate_plots.py
 python scripts/generate_reports.py
+```
+
+Optional validation for the storage and API layers:
+
+```bash
+python scripts/import_datasets.py \
+  --db data/dylibscope.sqlite \
+  --dataset-name public-baseline \
+  --hla-input src/dylibscope/high_level_analysis/dylibs_analysis_local.json \
+  --lla-input src/dylibscope/low_level_analysis/ghidra_out/merged.json
+```
+
+```bash
+python scripts/query_metrics.py libsqlite3.0.dylib \
+  --db data/dylibscope.sqlite \
+  --dataset-name public-baseline \
+  --metric imported_function_count
+```
+
+```bash
+python scripts/run_api.py --db data/dylibscope.sqlite
 ```
 
 ## Known Limitations
