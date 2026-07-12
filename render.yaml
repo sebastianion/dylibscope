@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: dylibscope-api
+    runtime: python
+    plan: free
+    autoDeploy: true
+    buildCommand: >-
+      pip install -e ".[api]" &&
+      python scripts/import_datasets.py
+      --db data/dylibscope.sqlite
+      --dataset-name public-baseline
+      --hla-input src/dylibscope/high_level_analysis/dylibs_analysis_local.json
+      --lla-input src/dylibscope/low_level_analysis/ghidra_out/merged.json
+    startCommand: >-
+      uvicorn dylibscope.api.app:app
+      --host 0.0.0.0
+      --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: DYLIBSCOPE_DB_PATH
+        value: data/dylibscope.sqlite

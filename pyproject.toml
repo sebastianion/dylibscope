@@ -13,15 +13,19 @@ dependencies = [
     "lief",
 ]
 
-[tool.setuptools.packages.find]
-where = ["src"]
-
 [project.optional-dependencies]
 dev = [
     "ruff",
     "pytest",
-    "pytest-cov"
+    "pytest-cov",
 ]
+api = [
+    "fastapi",
+    "uvicorn[standard]",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.ruff]
 line-length = 120
