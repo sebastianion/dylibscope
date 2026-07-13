@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+from fastapi.middleware.cors import CORSMiddleware
+
 import sqlite3
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Literal, Optional, Union
@@ -67,6 +70,13 @@ class CompareLibraryVersionsRequest(BaseModel):
 
 class ErrorResponse(BaseModel):
     detail: str
+
+
+def _cors_origins_from_env() -> List[str]:
+    origins = os.getenv("DYLIBSCOPE_CORS_ORIGINS", "*").strip()
+    if origins == "*":
+        return ["*"]
+    return [origin.strip() for origin in origins.split(",") if origin.strip()]
 
 
 def _parse_metric_filters(metric: Optional[List[str]], metrics: Optional[str]) -> Optional[List[str]]:
@@ -264,6 +274,14 @@ def create_app(db_path: Optional[Union[str, Path]] = None) -> FastAPI:
         title="DylibScope API",
         version="0.2.0",
         description="HTTP API for querying and comparing normalized DylibScope static-analysis metrics.",
+    )
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins_from_env(),
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
     def get_conn() -> Iterator[sqlite3.Connection]:
