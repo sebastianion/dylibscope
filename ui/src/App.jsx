@@ -1,4 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import { API_BASE_URL, apiGet, apiPost } from './api.js';
 import { metricDictionary, scoreDictionary } from './metricDictionary.js';
 
@@ -12,6 +24,169 @@ const METRIC_OPTIONS = Object.entries(metricDictionary).map(([value, details]) =
 
 const DEFAULT_COMPARE_METRICS = ['num_symbols', 'imported_function_count', 'num_sections'];
 const DEFAULT_COMPARE_LIBRARIES = ['libsqlite3.0.dylib', 'libresolv.dylib'];
+const DEFAULT_TIMELINE_METRIC = 'num_symbols';
+const PUBLISHED_PLOT_BASE_URL = 'https://sebastianion.github.io/dylibscope';
+const PUBLISHED_PLOTS = [
+  {
+    title: 'High-level analysis evolution',
+    description: 'Full Plotly dashboard for LIEF-derived Mach-O metadata such as symbols, imports, exports, and sections.',
+    path: 'high_level_analysis_dylib_evolution.html',
+  },
+  {
+    title: 'Low-level analysis evolution',
+    description: 'Full Plotly dashboard for Ghidra-derived implementation metrics such as CFG edges, allocation calls, syscalls, and Mach-port usage.',
+    path: 'low_level_analysis_dylib_evolution.html',
+  },
+];
+const CHART_PALETTE = ['#0f172a', '#2563eb', '#16a34a', '#d97706', '#dc2626', '#7c3aed'];
+
+
+function isFiniteNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function metricDisplayName(metricName) {
+  return metricDictionary[metricName]?.label || metricName;
+}
+
+function metricInterpretation(metricName) {
+  return metricDictionary[metricName]?.meaning || 'Numeric static-analysis metric.';
+}
+
+function getMetricValue(observation, metricName) {
+  const metric = observation?.metrics?.[metricName];
+  if (!metric) return null;
+  return metric.value;
+}
+
+function versionDisplayLabel(observation) {
+  const release = observation?.ios_release;
+  const label = observation?.ios_version || observation?.version_label;
+  if (release && label) return `${release} - ${label}`;
+  return String(label || release || 'unknown');
+}
+
+function compactVersionLabel(value) {
+  const label = String(value || 'unknown');
+  if (label.includes(' - ')) return label.split(' - ')[0];
+  const match = label.match(/(?:^|_)(\d+(?:\.\d+){1,2})(?:_|$)/);
+  return match ? match[1] : label;
+}
+
+function formatCompactChartNumber(value) {
+  if (!isFiniteNumber(value)) return value;
+  return Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 2 }).format(value);
+}
+
+function sortTimeline(timeline) {
+  return [...timeline].sort((a, b) => {
+    const aRelease = Number.parseFloat(a.ios_release || '');
+    const bRelease = Number.parseFloat(b.ios_release || '');
+    if (Number.isFinite(aRelease) && Number.isFinite(bRelease) && aRelease !== bRelease) {
+      return aRelease - bRelease;
+    }
+    return versionDisplayLabel(a).localeCompare(versionDisplayLabel(b), undefined, { numeric: true });
+  });
+}
+
+function buildTimelineMetricOptions(timeline) {
+  const names = new Set();
+  timeline.forEach((observation) => {
+    Object.entries(observation?.metrics || {}).forEach(([name, payload]) => {
+      if (isFiniteNumber(payload?.value)) {
+        names.add(name);
+      }
+    });
+  });
+  const known = METRIC_OPTIONS.filter((option) => names.has(option.value));
+  const knownValues = new Set(known.map((option) => option.value));
+  const unknown = [...names]
+    .filter((name) => !knownValues.has(name))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+    .map((name) => ({ value: name, label: name, group: 'Other metrics' }));
+  return [...known, ...unknown];
+}
+
+function chooseTimelineMetric(timeline) {
+  const options = buildTimelineMetricOptions(timeline);
+  if (options.some((option) => option.value === DEFAULT_TIMELINE_METRIC)) {
+    return DEFAULT_TIMELINE_METRIC;
+  }
+  return options[0]?.value || DEFAULT_TIMELINE_METRIC;
+}
+
+function buildTimelineChartRows(timeline, metricName) {
+  return sortTimeline(timeline)
+    .map((observation) => {
+      const fullVersion = versionDisplayLabel(observation);
+      return {
+        version: compactVersionLabel(fullVersion),
+        fullVersion,
+        value: getMetricValue(observation, metricName),
+      };
+    })
+    .filter((row) => isFiniteNumber(row.value));
+}
+
+function buildComparisonChartData(data) {
+  const numericResults = (data?.results || [])
+    .filter((row) => Object.values(row.values || {}).some((value) => isFiniteNumber(value)))
+    .slice(0, 5);
+  const labels = [];
+  numericResults.forEach((row) => {
+    Object.keys(row.values || {}).forEach((label) => {
+      if (!labels.includes(label)) labels.push(label);
+    });
+  });
+  const rows = labels.map((label) => {
+    const chartRow = {
+      version: compactVersionLabel(label),
+      fullVersion: label,
+    };
+    numericResults.forEach((result) => {
+      const value = result.values?.[label];
+      chartRow[result.metric] = isFiniteNumber(value) ? value : null;
+    });
+    return chartRow;
+  });
+  return { rows, metrics: numericResults.map((row) => row.metric) };
+}
+
+function buildLibraryComparisonChartData(data) {
+  const numericResults = (data?.results || [])
+    .filter((row) => Object.values(row.values || {}).some((value) => isFiniteNumber(value)))
+    .slice(0, 5);
+  const labels = [];
+  numericResults.forEach((row) => {
+    Object.keys(row.values || {}).forEach((label) => {
+      if (!labels.includes(label)) labels.push(label);
+    });
+  });
+  const rows = labels.map((label) => {
+    const chartRow = { library: label };
+    numericResults.forEach((result) => {
+      const value = result.values?.[label];
+      chartRow[result.metric] = isFiniteNumber(value) ? value : null;
+    });
+    return chartRow;
+  });
+  return { rows, metrics: numericResults.map((row) => row.metric) };
+}
+
+function buildBandChartRows(summary) {
+  const counts = summary?.band_counts || {};
+  const order = ['low', 'medium', 'high'];
+  return [...new Set([...order, ...Object.keys(counts)])]
+    .filter((band) => counts[band] !== undefined)
+    .map((band) => ({ band, count: counts[band] }));
+}
+
+function buildTopScoreRows(summary) {
+  return (summary?.top_libraries || [])
+    .slice(0, 10)
+    .map((item) => ({ library: item.library, score: item.score }))
+    .filter((row) => isFiniteNumber(row.score));
+}
 
 function buildMetricQuery(selectedMetrics) {
   return selectedMetrics.length ? selectedMetrics.join(',') : undefined;
@@ -243,6 +418,247 @@ function ErrorBox({ error }) {
   return <div className="errorBox">{error}</div>;
 }
 
+
+function ChartPanel({ title, description, children }) {
+  return (
+    <div className="chartPanel">
+      <div className="chartHeader">
+        <div>
+          <h3>{title}</h3>
+          {description ? <p className="muted">{description}</p> : null}
+        </div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function EmptyChartState({ children }) {
+  return <div className="emptyChartState">{children}</div>;
+}
+
+function MetricTimelineChart({ rows, metricName, title = 'Metric evolution', description }) {
+  if (!rows.length) {
+    return (
+      <ChartPanel title={title} description={description}>
+        <EmptyChartState>No numeric timeline data is available for this metric.</EmptyChartState>
+      </ChartPanel>
+    );
+  }
+
+  if (rows.length < 2) {
+    return (
+      <ChartPanel title={title} description={description}>
+        <EmptyChartState>At least two numeric observations are required to draw an evolution chart.</EmptyChartState>
+      </ChartPanel>
+    );
+  }
+
+  return (
+    <ChartPanel title={title} description={description}>
+      <div className="chartFrame">
+        <ResponsiveContainer width="100%" height={280}>
+          <LineChart data={rows} margin={{ top: 12, right: 24, left: 8, bottom: 8 }}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="version" />
+            <YAxis tickFormatter={formatCompactChartNumber} width={72} />
+            <Tooltip
+              formatter={(value) => [formatScalarValue(value), metricDisplayName(metricName)]}
+              labelFormatter={(_, payload) => payload?.[0]?.payload?.fullVersion || 'iOS version'}
+            />
+            <Legend />
+            <Line
+              type="monotone"
+              dataKey="value"
+              name={metricDisplayName(metricName)}
+              stroke={CHART_PALETTE[0]}
+              strokeWidth={2.5}
+              dot={{ r: 3 }}
+              activeDot={{ r: 5 }}
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </ChartPanel>
+  );
+}
+
+function MultiMetricLineChart({ rows, metrics, title, description, xKey = 'version' }) {
+  if (!rows.length || !metrics.length) {
+    return (
+      <ChartPanel title={title} description={description}>
+        <EmptyChartState>No numeric values are available for a contextual chart.</EmptyChartState>
+      </ChartPanel>
+    );
+  }
+
+  return (
+    <ChartPanel title={title} description={description}>
+      <div className="chartFrame">
+        <ResponsiveContainer width="100%" height={300}>
+          <LineChart data={rows} margin={{ top: 12, right: 24, left: 8, bottom: 8 }}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey={xKey} />
+            <YAxis tickFormatter={formatCompactChartNumber} width={72} />
+            <Tooltip
+              formatter={(value, name) => [formatScalarValue(value), metricDisplayName(name)]}
+              labelFormatter={(label, payload) => payload?.[0]?.payload?.fullVersion || label}
+            />
+            <Legend />
+            {metrics.map((metric, index) => (
+              <Line
+                key={metric}
+                type="monotone"
+                dataKey={metric}
+                name={metricDisplayName(metric)}
+                stroke={CHART_PALETTE[index % CHART_PALETTE.length]}
+                strokeWidth={2.25}
+                dot={{ r: 3 }}
+                connectNulls
+              />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </ChartPanel>
+  );
+}
+
+
+function MultiMetricBarChart({ rows, metrics, title, description, xKey = 'library' }) {
+  if (!rows.length || !metrics.length) {
+    return (
+      <ChartPanel title={title} description={description}>
+        <EmptyChartState>No numeric values are available for a comparison chart.</EmptyChartState>
+      </ChartPanel>
+    );
+  }
+
+  return (
+    <ChartPanel title={title} description={description}>
+      <div className="chartFrame">
+        <ResponsiveContainer width="100%" height={300}>
+          <BarChart data={rows} margin={{ top: 12, right: 24, left: 8, bottom: 8 }}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey={xKey} tick={{ fontSize: 11 }} />
+            <YAxis tickFormatter={formatCompactChartNumber} width={72} />
+            <Tooltip formatter={(value, name) => [formatScalarValue(value), metricDisplayName(name)]} />
+            <Legend />
+            {metrics.map((metric, index) => (
+              <Bar
+                key={metric}
+                dataKey={metric}
+                name={metricDisplayName(metric)}
+                fill={CHART_PALETTE[index % CHART_PALETTE.length]}
+                radius={[6, 6, 0, 0]}
+              />
+            ))}
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </ChartPanel>
+  );
+}
+
+function LibraryComparisonChart({ data }) {
+  const { rows, metrics } = buildLibraryComparisonChartData(data);
+  return (
+    <MultiMetricBarChart
+      rows={rows}
+      metrics={metrics}
+      title="Library comparison chart"
+      description="Numeric selected metrics for each matched library in the selected iOS scope."
+    />
+  );
+}
+
+function VersionComparisonChart({ data }) {
+  const { rows, metrics } = buildComparisonChartData(data);
+  return (
+    <MultiMetricLineChart
+      rows={rows}
+      metrics={metrics}
+      title="Version evolution chart"
+      description="Numeric selected metrics across the matched iOS version observations."
+    />
+  );
+}
+
+function BandCountsChart({ rows }) {
+  if (!rows.length) {
+    return (
+      <ChartPanel title="Band distribution" description="Low, medium, and high static-complexity band counts.">
+        <EmptyChartState>No band count data is available.</EmptyChartState>
+      </ChartPanel>
+    );
+  }
+
+  return (
+    <ChartPanel title="Band distribution" description="Low, medium, and high static-complexity band counts.">
+      <div className="chartFrame small">
+        <ResponsiveContainer width="100%" height={240}>
+          <BarChart data={rows} margin={{ top: 12, right: 24, left: 8, bottom: 8 }}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="band" />
+            <YAxis allowDecimals={false} width={56} />
+            <Tooltip formatter={(value) => [formatScalarValue(value), 'Libraries']} />
+            <Bar dataKey="count" name="Libraries" fill={CHART_PALETTE[1]} radius={[8, 8, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </ChartPanel>
+  );
+}
+
+function TopScoresChart({ rows }) {
+  if (!rows.length) {
+    return (
+      <ChartPanel title="Top libraries by score" description="Highest heuristic static scores in the selected iOS version.">
+        <EmptyChartState>No score data is available.</EmptyChartState>
+      </ChartPanel>
+    );
+  }
+
+  return (
+    <ChartPanel title="Top libraries by score" description="Highest heuristic static scores in the selected iOS version.">
+      <div className="chartFrame tall">
+        <ResponsiveContainer width="100%" height={360}>
+          <BarChart data={rows} layout="vertical" margin={{ top: 12, right: 24, left: 24, bottom: 8 }}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis type="number" domain={[0, 100]} />
+            <YAxis dataKey="library" type="category" width={210} tick={{ fontSize: 11 }} />
+            <Tooltip formatter={(value) => [formatScalarValue(value), 'Score']} />
+            <Bar dataKey="score" name="Score" fill={CHART_PALETTE[0]} radius={[0, 8, 8, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </ChartPanel>
+  );
+}
+
+function PublishedDashboards() {
+  return (
+    <Card title="Published Plotly dashboards">
+      <p className="note">
+        These are the full generated Plotly dashboards published through GitHub Pages. Use them for broad exploration.
+        Contextual charts are shown directly in the Library Explorer, comparison, and iOS summary sections.
+      </p>
+      <div className="dashboardGrid">
+        {PUBLISHED_PLOTS.map((plot) => {
+          const url = `${PUBLISHED_PLOT_BASE_URL}/${plot.path}`;
+          return (
+            <div className="dashboardCard" key={plot.path}>
+              <h3>{plot.title}</h3>
+              <p>{plot.description}</p>
+              <a href={url} target="_blank" rel="noreferrer">Open dashboard</a>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
 function Overview({ health, versionCount, libraryCount }) {
   return (
     <Card title="Overview">
@@ -275,6 +691,8 @@ function LibraryExplorer({ libraries, versions }) {
   const [iosVersion, setIosVersion] = useState('');
   const [selectedMetrics, setSelectedMetrics] = useState([]);
   const [libraryVersionChoices, setLibraryVersionChoices] = useState([]);
+  const [timeline, setTimeline] = useState([]);
+  const [chartMetric, setChartMetric] = useState(DEFAULT_TIMELINE_METRIC);
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [data, setData] = useState(null);
   const [report, setReport] = useState(null);
@@ -301,7 +719,10 @@ function LibraryExplorer({ libraries, versions }) {
           dataset_name: DEFAULT_DATASET,
         });
         if (cancelled) return;
-        const choices = buildObservationVersionChoices(response.timeline || []);
+        const timelineRows = response.timeline || [];
+        const choices = buildObservationVersionChoices(timelineRows);
+        setTimeline(timelineRows);
+        setChartMetric(chooseTimelineMetric(timelineRows));
         setLibraryVersionChoices(choices);
         if (choices.length && !choices.some((choice) => choice.value === iosVersion)) {
           setIosVersion(choices[0].value);
@@ -309,6 +730,7 @@ function LibraryExplorer({ libraries, versions }) {
       } catch (_) {
         if (!cancelled) {
           setLibraryVersionChoices([]);
+          setTimeline([]);
         }
       } finally {
         if (!cancelled) {
@@ -353,6 +775,8 @@ function LibraryExplorer({ libraries, versions }) {
 
   const fallbackVersionChoices = useMemo(() => buildVersionChoices(versions), [versions]);
   const activeVersionChoices = libraryVersionChoices.length ? libraryVersionChoices : fallbackVersionChoices;
+  const availableTimelineMetricOptions = useMemo(() => buildTimelineMetricOptions(timeline), [timeline]);
+  const timelineChartRows = useMemo(() => buildTimelineChartRows(timeline, chartMetric), [timeline, chartMetric]);
   const firstObservation = data?.observations?.[0];
   const metricEntries = Object.entries(firstObservation?.metrics || {});
   const scorePayload = primaryScorePayload(report);
@@ -377,6 +801,27 @@ function LibraryExplorer({ libraries, versions }) {
           </select>
         </label>
       </div>
+      {timeline.length ? (
+        <div className="contextChartBlock">
+          <div className="chartControlRow">
+            <label className="compactChartControl">
+              Timeline metric
+              <select value={chartMetric} onChange={(event) => setChartMetric(event.target.value)}>
+                {availableTimelineMetricOptions.map((item) => (
+                  <option key={item.value} value={item.value}>{item.label}</option>
+                ))}
+              </select>
+            </label>
+            <p className="muted">{metricInterpretation(chartMetric)}</p>
+          </div>
+          <MetricTimelineChart
+            rows={timelineChartRows}
+            metricName={chartMetric}
+            title="Library metric evolution"
+            description={`${library} across available iOS version observations.`}
+          />
+        </div>
+      ) : null}
       <MetricSelector selected={selectedMetrics} onChange={setSelectedMetrics} />
       <LoadingButton loading={loading} disabled={!library || !iosVersion} onClick={loadLibrary}>Load library</LoadingButton>
       <ErrorBox error={error} />
@@ -530,6 +975,7 @@ function CompareLibraries({ libraries, versions }) {
       <LoadingButton loading={loading} disabled={selectedLibraries.length < 2 || !iosVersion} onClick={compare}>Compare libraries</LoadingButton>
       {selectedLibraries.length < 2 ? <p className="muted">Select at least two libraries.</p> : null}
       <ErrorBox error={error} />
+      {data ? <LibraryComparisonChart data={data} /> : null}
       {data ? <ComparisonResults data={data} /> : null}
     </Card>
   );
@@ -636,6 +1082,7 @@ function CompareVersions({ libraries }) {
       <LoadingButton loading={loading} disabled={!library || selectedVersions.length < 2} onClick={compare}>Compare versions</LoadingButton>
       {selectedVersions.length < 2 ? <p className="muted">Select at least two versions for this library.</p> : null}
       <ErrorBox error={error} />
+      {data ? <VersionComparisonChart data={data} /> : null}
       {data ? <ComparisonResults data={data} showDelta /> : null}
     </Card>
   );
@@ -692,6 +1139,10 @@ function VersionSummary({ versions }) {
             <div className="scoreBox"><span>Observations</span><strong>{data.observation_count}</strong></div>
             <div className="scoreBox"><span>Average score</span><strong>{formatScalarValue(data.score_statistics?.average_score)}</strong></div>
             <div className="scoreBox"><span>Median score</span><strong>{formatScalarValue(data.score_statistics?.median_score)}</strong></div>
+          </div>
+          <div className="chartGrid">
+            <BandCountsChart rows={buildBandChartRows(data)} />
+            <TopScoresChart rows={buildTopScoreRows(data)} />
           </div>
           <h3>Band counts</h3>
           <div className="tagRow">
@@ -842,6 +1293,7 @@ export default function App() {
       </header>
       <ErrorBox error={loadError} />
       <Overview health={health} libraryCount={libraries.length} versionCount={versions.length} />
+      <PublishedDashboards />
       <LibraryExplorer libraries={libraries} versions={versions} />
       <CompareLibraries libraries={libraries} versions={versions} />
       <CompareVersions libraries={libraries} />
