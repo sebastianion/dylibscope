@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Optional, Union
+from threading import RLock
+from typing import Dict, Optional, Union
 
 from sqlalchemy import (
     Column,
@@ -18,7 +19,7 @@ from sqlalchemy import (
     func,
     select,
 )
-from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.engine import Connection, Engine, make_url
 from sqlalchemy.exc import IntegrityError
 
 SCHEMA_VERSION = 3
@@ -156,10 +157,62 @@ def normalize_database_url(database_url: str) -> str:
     return database_url
 
 
+def _int_env(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    return int(value)
+
+
+def _float_env(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    return float(value)
+
+
+_ENGINE_CACHE: Dict[str, Engine] = {}
+_ENGINE_CACHE_LOCK = RLock()
+
+
+def _new_db_engine(resolved_url: str) -> Engine:
+    url = make_url(resolved_url)
+
+    if url.drivername.startswith("sqlite"):
+        return create_engine(
+            resolved_url,
+            future=True,
+            connect_args={"check_same_thread": False},
+        )
+
+    return create_engine(
+        resolved_url,
+        future=True,
+        pool_pre_ping=True,
+        pool_size=_int_env("DYLIBSCOPE_DB_POOL_SIZE", 3),
+        max_overflow=_int_env("DYLIBSCOPE_DB_MAX_OVERFLOW", 0),
+        pool_timeout=_float_env("DYLIBSCOPE_DB_POOL_TIMEOUT", 10.0),
+        pool_recycle=_int_env("DYLIBSCOPE_DB_POOL_RECYCLE", 300),
+    )
+
+
 def create_db_engine(database_url: Optional[str] = None) -> Engine:
     resolved_url = normalize_database_url(database_url or default_database_url())
-    connect_args = {"check_same_thread": False} if resolved_url.startswith("sqlite") else {}
-    return create_engine(resolved_url, future=True, connect_args=connect_args)
+    with _ENGINE_CACHE_LOCK:
+        engine = _ENGINE_CACHE.get(resolved_url)
+        if engine is None:
+            engine = _new_db_engine(resolved_url)
+            _ENGINE_CACHE[resolved_url] = engine
+        return engine
+
+
+def dispose_cached_engines() -> None:
+    """Dispose all cached engines. Mostly useful for tests and local diagnostics."""
+    with _ENGINE_CACHE_LOCK:
+        engines = list(_ENGINE_CACHE.values())
+        _ENGINE_CACHE.clear()
+    for engine in engines:
+        engine.dispose()
 
 
 def connect(database: Optional[Union[str, Path]] = None) -> Connection:
