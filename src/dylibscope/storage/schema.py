@@ -1,89 +1,118 @@
 from __future__ import annotations
 
-import sqlite3
+import os
+from pathlib import Path
+from typing import Optional, Union
 
-SCHEMA_VERSION = 2
+from sqlalchemy import (
+    Column,
+    Float,
+    ForeignKey,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    Text,
+    UniqueConstraint,
+    create_engine,
+    func,
+    select,
+)
+from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.exc import IntegrityError
 
-CREATE_TABLES_SQL = """
-PRAGMA foreign_keys = ON;
+SCHEMA_VERSION = 3
+DEFAULT_SQLITE_PATH = Path("data/dylibscope.sqlite")
 
-CREATE TABLE IF NOT EXISTS schema_metadata (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
+metadata = MetaData()
 
-CREATE TABLE IF NOT EXISTS datasets (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE,
-    source TEXT NOT NULL,
-    visibility TEXT NOT NULL DEFAULT 'public',
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
+schema_metadata = Table(
+    "schema_metadata",
+    metadata,
+    Column("key", String, primary_key=True),
+    Column("value", Text, nullable=False),
+)
 
-CREATE TABLE IF NOT EXISTS ios_versions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    version_label TEXT NOT NULL UNIQUE,
-    device_model TEXT,
-    ios_release TEXT,
-    build_number TEXT,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
+datasets = Table(
+    "datasets",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("name", String, nullable=False, unique=True),
+    Column("source", String, nullable=False),
+    Column("visibility", String, nullable=False, server_default="public"),
+    Column("created_at", String, nullable=False, server_default=func.current_timestamp()),
+)
 
-CREATE TABLE IF NOT EXISTS libraries (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    canonical_name TEXT NOT NULL UNIQUE,
-    display_name TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
+ios_versions = Table(
+    "ios_versions",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("version_label", String, nullable=False, unique=True),
+    Column("device_model", String),
+    Column("ios_release", String),
+    Column("build_number", String),
+    Column("created_at", String, nullable=False, server_default=func.current_timestamp()),
+)
 
-CREATE TABLE IF NOT EXISTS library_observations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    dataset_id INTEGER NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
-    library_id INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
-    ios_version_id INTEGER NOT NULL REFERENCES ios_versions(id) ON DELETE CASCADE,
-    original_path TEXT,
-    hla_source_seen INTEGER NOT NULL DEFAULT 0,
-    lla_source_seen INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(dataset_id, library_id, ios_version_id)
-);
+libraries = Table(
+    "libraries",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("canonical_name", String, nullable=False, unique=True),
+    Column("display_name", String, nullable=False),
+    Column("created_at", String, nullable=False, server_default=func.current_timestamp()),
+)
 
-CREATE TABLE IF NOT EXISTS metric_definitions (
-    name TEXT PRIMARY KEY,
-    level TEXT NOT NULL,
-    value_type TEXT NOT NULL,
-    description TEXT NOT NULL
-);
+library_observations = Table(
+    "library_observations",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("dataset_id", Integer, ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False),
+    Column("library_id", Integer, ForeignKey("libraries.id", ondelete="CASCADE"), nullable=False),
+    Column("ios_version_id", Integer, ForeignKey("ios_versions.id", ondelete="CASCADE"), nullable=False),
+    Column("original_path", Text),
+    Column("hla_source_seen", Integer, nullable=False, server_default="0"),
+    Column("lla_source_seen", Integer, nullable=False, server_default="0"),
+    Column("created_at", String, nullable=False, server_default=func.current_timestamp()),
+    Column("updated_at", String, nullable=False, server_default=func.current_timestamp()),
+    UniqueConstraint("dataset_id", "library_id", "ios_version_id", name="uq_observation_identity"),
+)
 
-CREATE TABLE IF NOT EXISTS metric_values (
-    observation_id INTEGER NOT NULL REFERENCES library_observations(id) ON DELETE CASCADE,
-    metric_name TEXT NOT NULL REFERENCES metric_definitions(name) ON DELETE CASCADE,
-    numeric_value REAL,
-    text_value TEXT,
-    json_value TEXT,
-    PRIMARY KEY (observation_id, metric_name)
-);
+metric_definitions = Table(
+    "metric_definitions",
+    metadata,
+    Column("name", String, primary_key=True),
+    Column("level", String, nullable=False),
+    Column("value_type", String, nullable=False),
+    Column("description", Text, nullable=False),
+)
 
-CREATE TABLE IF NOT EXISTS import_errors (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    dataset_id INTEGER REFERENCES datasets(id) ON DELETE CASCADE,
-    source_level TEXT NOT NULL,
-    source_path TEXT NOT NULL,
-    line_number INTEGER,
-    error_message TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
+metric_values = Table(
+    "metric_values",
+    metadata,
+    Column(
+        "observation_id",
+        Integer,
+        ForeignKey("library_observations.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("metric_name", String, ForeignKey("metric_definitions.name", ondelete="CASCADE"), primary_key=True),
+    Column("numeric_value", Float),
+    Column("text_value", Text),
+    Column("json_value", Text),
+)
 
-CREATE INDEX IF NOT EXISTS idx_ios_versions_label ON ios_versions(version_label);
-CREATE INDEX IF NOT EXISTS idx_ios_versions_release ON ios_versions(ios_release);
-CREATE INDEX IF NOT EXISTS idx_ios_versions_build ON ios_versions(build_number);
-CREATE INDEX IF NOT EXISTS idx_observations_dataset ON library_observations(dataset_id);
-CREATE INDEX IF NOT EXISTS idx_observations_library ON library_observations(library_id);
-CREATE INDEX IF NOT EXISTS idx_observations_ios_version ON library_observations(ios_version_id);
-CREATE INDEX IF NOT EXISTS idx_metric_values_metric ON metric_values(metric_name);
-CREATE INDEX IF NOT EXISTS idx_metric_values_numeric ON metric_values(metric_name, numeric_value);
-"""
+import_errors = Table(
+    "import_errors",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("dataset_id", Integer, ForeignKey("datasets.id", ondelete="CASCADE")),
+    Column("source_level", String, nullable=False),
+    Column("source_path", Text, nullable=False),
+    Column("line_number", Integer),
+    Column("error_message", Text, nullable=False),
+    Column("created_at", String, nullable=False, server_default=func.current_timestamp()),
+)
 
 METRIC_DEFINITIONS = [
     ("deployment_target", "high", "text", "Minimum deployment target extracted from Mach-O load commands."),
@@ -102,26 +131,91 @@ METRIC_DEFINITIONS = [
 ]
 
 
-def connect(db_path: str) -> sqlite3.Connection:
-    """Open a SQLite connection with foreign keys enabled."""
-    conn = sqlite3.connect(db_path, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
+def is_database_url(value: str) -> bool:
+    return "://" in value
+
+
+def sqlite_url_from_path(db_path: Union[str, Path]) -> str:
+    path = Path(db_path)
+    if str(path) == ":memory:":
+        return "sqlite+pysqlite:///:memory:"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return f"sqlite+pysqlite:///{path.as_posix()}"
+
+
+def default_database_url() -> str:
+    return sqlite_url_from_path(DEFAULT_SQLITE_PATH)
+
+
+def normalize_database_url(database_url: str) -> str:
+    """Normalize common Postgres URLs to the installed psycopg v3 driver."""
+    if database_url.startswith("postgresql://"):
+        return database_url.replace("postgresql://", "postgresql+psycopg://", 1)
+    if database_url.startswith("postgres://"):
+        return database_url.replace("postgres://", "postgresql+psycopg://", 1)
+    return database_url
+
+
+def create_db_engine(database_url: Optional[str] = None) -> Engine:
+    resolved_url = normalize_database_url(database_url or default_database_url())
+    connect_args = {"check_same_thread": False} if resolved_url.startswith("sqlite") else {}
+    return create_engine(resolved_url, future=True, connect_args=connect_args)
+
+
+def connect(database: Optional[Union[str, Path]] = None) -> Connection:
+    """Open a database connection.
+
+    Backward compatibility:
+    - ``connect("data/dylibscope.sqlite")`` still opens a SQLite database.
+    - ``connect("postgresql+psycopg://...")`` opens an external database.
+    - ``connect()`` uses ``DATABASE_URL`` when set, otherwise local SQLite.
+    """
+    if database is None:
+        database_url = os.getenv("DATABASE_URL") or os.getenv("DYLIBSCOPE_DATABASE_URL") or default_database_url()
+    else:
+        text_value = str(database)
+        database_url = text_value if is_database_url(text_value) else sqlite_url_from_path(text_value)
+
+    database_url = normalize_database_url(database_url)
+    engine = create_db_engine(database_url)
+    conn = engine.connect()
+    if conn.dialect.name == "sqlite":
+        conn.exec_driver_sql("PRAGMA foreign_keys = ON")
     return conn
 
 
-def initialize_database(conn: sqlite3.Connection) -> None:
+def initialize_database(conn: Connection) -> None:
     """Create schema tables and insert metric definitions."""
-    conn.executescript(CREATE_TABLES_SQL)
-    conn.execute(
-        "INSERT OR REPLACE INTO schema_metadata(key, value) VALUES (?, ?)",
-        ("schema_version", str(SCHEMA_VERSION)),
-    )
-    conn.executemany(
-        """
-        INSERT OR REPLACE INTO metric_definitions(name, level, value_type, description)
-        VALUES (?, ?, ?, ?)
-        """,
-        METRIC_DEFINITIONS,
-    )
+    metadata.create_all(conn)
+
+    _upsert_schema_metadata(conn, "schema_version", str(SCHEMA_VERSION))
+    for name, level, value_type, description in METRIC_DEFINITIONS:
+        _upsert_metric_definition(conn, name, level, value_type, description)
     conn.commit()
+
+
+def _upsert_schema_metadata(conn: Connection, key: str, value: str) -> None:
+    existing = conn.execute(select(schema_metadata.c.key).where(schema_metadata.c.key == key)).first()
+    if existing:
+        conn.execute(schema_metadata.update().where(schema_metadata.c.key == key).values(value=value))
+    else:
+        conn.execute(schema_metadata.insert().values(key=key, value=value))
+
+
+def _upsert_metric_definition(
+    conn: Connection,
+    name: str,
+    level: str,
+    value_type: str,
+    description: str,
+) -> None:
+    existing = conn.execute(select(metric_definitions.c.name).where(metric_definitions.c.name == name)).first()
+    values = {"level": level, "value_type": value_type, "description": description}
+    if existing:
+        conn.execute(metric_definitions.update().where(metric_definitions.c.name == name).values(**values))
+    else:
+        try:
+            conn.execute(metric_definitions.insert().values(name=name, **values))
+        except IntegrityError:
+            conn.rollback()
+            conn.execute(metric_definitions.update().where(metric_definitions.c.name == name).values(**values))

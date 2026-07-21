@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import os
-from fastapi.middleware.cors import CORSMiddleware
-
-import sqlite3
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Literal, Optional, Union
 
 from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import text
+from sqlalchemy.engine import Connection
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.engine.url import make_url
 
-from dylibscope.api.config import resolve_db_path
+from dylibscope.api.config import resolve_database_url
 from dylibscope.security_analysis.derived_scoring import (
     INTERPRETATION_NOTE,
     build_library_security_report,
@@ -20,6 +22,7 @@ from dylibscope.security_analysis.derived_scoring import (
 )
 from dylibscope.storage.repository import (
     get_library_metrics,
+    list_datasets,
     list_ios_versions,
     list_libraries,
     list_observations_for_ios_version,
@@ -90,16 +93,38 @@ def _parse_metric_filters(metric: Optional[List[str]], metrics: Optional[str]) -
     return cleaned or None
 
 
-def _connection_dependency(db_path: Path) -> Iterator[sqlite3.Connection]:
-    if not db_path.exists():
+def _safe_database_label(database_url: str) -> str:
+    url = make_url(database_url)
+    if url.drivername.startswith("sqlite"):
+        return str(url.database)
+    return str(url.set(password="***"))
+
+
+def _sqlite_file_exists(database_url: str) -> Optional[bool]:
+    url = make_url(database_url)
+    if not url.drivername.startswith("sqlite"):
+        return None
+    if url.database in (None, "", ":memory:"):
+        return True
+    return Path(url.database).exists()
+
+
+def _connection_dependency(database_url: str) -> Iterator[Connection]:
+    sqlite_exists = _sqlite_file_exists(database_url)
+    if sqlite_exists is False:
         raise HTTPException(
             status_code=503,
             detail=(
-                f"SQLite database not found at '{db_path}'. "
+                f"SQLite database not found at '{_safe_database_label(database_url)}'. "
                 "Run scripts/import_datasets.py before starting the API."
             ),
         )
-    conn = connect(str(db_path))
+
+    try:
+        conn = connect(database_url)
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=503, detail=f"Database connection failed: {exc}") from exc
+
     try:
         yield conn
     finally:
@@ -156,7 +181,6 @@ def _summarize_numeric_values(values: Dict[str, Any]) -> Dict[str, Any]:
     high = numeric_values[leader]
     low = numeric_values[lowest]
     ratio = None if low == 0 else high / low
-
     return {
         "leader": leader,
         "lowest": lowest,
@@ -169,11 +193,7 @@ def _build_metric_comparison_results(
     entity_observations: Dict[str, Dict[str, Any]],
     requested_metrics: Optional[Iterable[str]] = None,
 ) -> List[Dict[str, Any]]:
-    """Build human-readable metric comparison rows for named entities.
-
-    ``entity_observations`` maps an entity label to one observation. For library
-    comparison, the entity label is the library name.
-    """
+    """Build human-readable metric comparison rows for named entities."""
     observations = list(entity_observations.values())
     metric_names = _select_metrics_for_comparison(observations, requested_metrics)
 
@@ -192,7 +212,6 @@ def _build_metric_comparison_results(
                 "ratio_high_to_low": numeric_summary["ratio_high_to_low"],
             }
         )
-
     return rows
 
 
@@ -219,10 +238,10 @@ def _build_version_evolution_results(
         numeric_summary = _summarize_numeric_values(values)
         first_value = _metric_value(first_observation, metric_name)
         last_value = _metric_value(last_observation, metric_name)
+
         delta = None
         percent_change = None
         direction = "not_comparable"
-
         if _is_number(first_value) and _is_number(last_value):
             delta = last_value - first_value
             percent_change = None if first_value == 0 else round((delta / first_value) * 100, 3)
@@ -248,31 +267,24 @@ def _build_version_evolution_results(
                 "direction": direction,
             }
         )
-
     return rows
 
 
 def _first_observation_for_scope(observations: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Pick the first observation for a requested scope.
-
-    If the caller filters by a full firmware label, this is exact. If the caller
-    filters only by an iOS release and the DB contains multiple device/build
-    labels for that release, the API still returns one representative observation
-    and keeps the selected firmware label visible in the response.
-    """
+    """Pick the first observation for a requested scope."""
     return observations[0] if observations else None
 
 
-def create_app(db_path: Optional[Union[str, Path]] = None) -> FastAPI:
-    """Create the DylibScope FastAPI application.
-
-    ``db_path`` is injectable so tests can run against a temporary database.
-    """
-    resolved_db_path = resolve_db_path(db_path)
+def create_app(
+    db_path: Optional[Union[str, Path]] = None,
+    database_url: Optional[str] = None,
+) -> FastAPI:
+    """Create the DylibScope FastAPI application."""
+    resolved_database_url = resolve_database_url(db_path=db_path, database_url=database_url)
 
     app = FastAPI(
         title="DylibScope API",
-        version="0.2.0",
+        version="0.3.0",
         description="HTTP API for querying and comparing normalized DylibScope static-analysis metrics.",
     )
 
@@ -284,28 +296,51 @@ def create_app(db_path: Optional[Union[str, Path]] = None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    def get_conn() -> Iterator[sqlite3.Connection]:
-        yield from _connection_dependency(resolved_db_path)
+    def get_conn() -> Iterator[Connection]:
+        yield from _connection_dependency(resolved_database_url)
 
     @app.get("/health")
     def health() -> Dict[str, Any]:
-        database_exists = resolved_db_path.exists()
-        return {
-            "status": "ok" if database_exists else "missing_database",
-            "database_path": str(resolved_db_path),
-            "database_exists": database_exists,
-        }
+        sqlite_exists = _sqlite_file_exists(resolved_database_url)
+        try:
+            conn = connect(resolved_database_url)
+            try:
+                metric_count = conn.execute(text("SELECT COUNT(*) FROM metric_definitions")).scalar_one()
+                dataset_count = conn.execute(text("SELECT COUNT(*) FROM datasets")).scalar_one()
+            finally:
+                conn.close()
+            return {
+                "status": "ok",
+                "database": _safe_database_label(resolved_database_url),
+                "database_backend": make_url(resolved_database_url).drivername,
+                "database_exists": True if sqlite_exists is None else sqlite_exists,
+                "metric_definition_count": metric_count,
+                "dataset_count": dataset_count,
+            }
+        except Exception as exc:  # noqa: BLE001 - readiness endpoint should report failed DB readiness
+            return {
+                "status": "database_unready",
+                "database": _safe_database_label(resolved_database_url),
+                "database_backend": make_url(resolved_database_url).drivername,
+                "database_exists": False if sqlite_exists is False else sqlite_exists,
+                "error": str(exc),
+            }
+
+    @app.get("/v1/datasets")
+    def api_list_datasets(conn: Connection = Depends(get_conn)) -> Dict[str, Any]:
+        items = list_datasets(conn)
+        return {"count": len(items), "datasets": items}
 
     @app.get("/v1/libraries")
     def api_list_libraries(
         dataset_name: Optional[str] = Query(default=None),
-        conn: sqlite3.Connection = Depends(get_conn),
+        conn: Connection = Depends(get_conn),
     ) -> Dict[str, Any]:
         libraries = list_libraries(conn, dataset_name=dataset_name)
         return {"count": len(libraries), "libraries": libraries}
 
     @app.get("/v1/ios-versions")
-    def api_list_ios_versions(conn: sqlite3.Connection = Depends(get_conn)) -> Dict[str, Any]:
+    def api_list_ios_versions(conn: Connection = Depends(get_conn)) -> Dict[str, Any]:
         versions = list_ios_versions(conn)
         return {"count": len(versions), "ios_versions": versions}
 
@@ -317,7 +352,7 @@ def create_app(db_path: Optional[Union[str, Path]] = None) -> FastAPI:
         metric: Optional[List[str]] = Query(default=None, description="Repeatable exact metric filter."),
         metrics: Optional[str] = Query(default=None, description="Comma-separated exact metric filter."),
         limit: int = Query(default=10, ge=1, le=50, description="Maximum number of top libraries to return."),
-        conn: sqlite3.Connection = Depends(get_conn),
+        conn: Connection = Depends(get_conn),
     ) -> Dict[str, Any]:
         selected_metrics = _parse_metric_filters(metric, metrics)
         observations = list_observations_for_ios_version(
@@ -353,7 +388,7 @@ def create_app(db_path: Optional[Union[str, Path]] = None) -> FastAPI:
         level: Optional[MetricLevel] = Query(default=None),
         metric: Optional[List[str]] = Query(default=None, description="Repeatable exact metric filter."),
         metrics: Optional[str] = Query(default=None, description="Comma-separated exact metric filter."),
-        conn: sqlite3.Connection = Depends(get_conn),
+        conn: Connection = Depends(get_conn),
     ) -> Dict[str, Any]:
         selected_metrics = _parse_metric_filters(metric, metrics)
         observations = get_library_metrics(
@@ -383,7 +418,7 @@ def create_app(db_path: Optional[Union[str, Path]] = None) -> FastAPI:
         level: Optional[MetricLevel] = Query(default=None),
         metric: Optional[List[str]] = Query(default=None),
         metrics: Optional[str] = Query(default=None),
-        conn: sqlite3.Connection = Depends(get_conn),
+        conn: Connection = Depends(get_conn),
     ) -> Dict[str, Any]:
         selected_metrics = _parse_metric_filters(metric, metrics)
         observations = get_library_metrics(
@@ -415,7 +450,7 @@ def create_app(db_path: Optional[Union[str, Path]] = None) -> FastAPI:
         level: Optional[MetricLevel] = Query(default=None),
         metric: Optional[List[str]] = Query(default=None, description="Repeatable exact metric filter."),
         metrics: Optional[str] = Query(default=None, description="Comma-separated exact metric filter."),
-        conn: sqlite3.Connection = Depends(get_conn),
+        conn: Connection = Depends(get_conn),
     ) -> Dict[str, Any]:
         selected_metrics = _parse_metric_filters(metric, metrics)
 
@@ -446,7 +481,6 @@ def create_app(db_path: Optional[Union[str, Path]] = None) -> FastAPI:
             to_observation = _first_observation_for_scope(to_observations)
             if not from_observation or not to_observation:
                 raise HTTPException(status_code=404, detail="Metrics were not found for both requested transition endpoints.")
-
             return {
                 "report_type": "library_transition_security_report",
                 "library": library_name,
@@ -507,7 +541,7 @@ def create_app(db_path: Optional[Union[str, Path]] = None) -> FastAPI:
     @app.post("/v1/libraries/compare", responses={404: {"model": ErrorResponse}})
     def api_compare_libraries(
         request: CompareLibrariesRequest,
-        conn: sqlite3.Connection = Depends(get_conn),
+        conn: Connection = Depends(get_conn),
     ) -> Dict[str, Any]:
         selected_observations: Dict[str, Dict[str, Any]] = {}
         resolved_observations: List[Dict[str, Any]] = []
@@ -566,7 +600,7 @@ def create_app(db_path: Optional[Union[str, Path]] = None) -> FastAPI:
     def api_compare_library_versions(
         library_name: str,
         request: CompareLibraryVersionsRequest,
-        conn: sqlite3.Connection = Depends(get_conn),
+        conn: Connection = Depends(get_conn),
     ) -> Dict[str, Any]:
         selected_observations: Dict[str, Dict[str, Any]] = {}
         resolved_observations: List[Dict[str, Any]] = []
