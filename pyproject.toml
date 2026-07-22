@@ -29,6 +29,7 @@ api = [
     "fastapi",
     "uvicorn[standard]",
     "psycopg[binary]>=3.1",
+    "PyJWT>=2.8",
 ]
 
 [tool.ruff]

@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from sqlalchemy import bindparam, select, text
 from sqlalchemy.engine import Connection, RowMapping
 
 from dylibscope.storage.normalize import canonicalize_library_name
 from dylibscope.storage.schema import datasets
+
+
+PUBLIC_DATASET_VISIBILITY = "public"
 
 
 def _as_dict(row: RowMapping) -> Dict[str, Any]:
@@ -25,22 +28,34 @@ def _coerce_metric_value(row: RowMapping) -> Any:
     return None
 
 
-def list_datasets(conn: Connection) -> List[Dict[str, Any]]:
+def _visibility_condition(owner_user_id: Optional[str]) -> Tuple[str, Dict[str, Any]]:
+    if owner_user_id:
+        return "(d.visibility = 'public' OR d.owner_user_id = :owner_user_id)", {"owner_user_id": owner_user_id}
+    return "d.visibility = 'public'", {}
+
+
+def list_datasets(conn: Connection, owner_user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    visibility_sql, params = _visibility_condition(owner_user_id)
     rows = conn.execute(
         text(
-            """
+            f"""
             SELECT
                 d.name,
                 d.source,
                 d.visibility,
+                d.owner_user_id,
+                COALESCE(d.source_type, d.source) AS source_type,
+                COALESCE(d.trust_level, 'unknown') AS trust_level,
                 d.created_at,
                 COUNT(o.id) AS observation_count
             FROM datasets d
             LEFT JOIN library_observations o ON o.dataset_id = d.id
-            GROUP BY d.id, d.name, d.source, d.visibility, d.created_at
-            ORDER BY d.name
+            WHERE {visibility_sql}
+            GROUP BY d.id, d.name, d.source, d.visibility, d.owner_user_id, d.source_type, d.trust_level, d.created_at
+            ORDER BY CASE WHEN d.visibility = 'public' THEN 0 ELSE 1 END, d.name
             """
-        )
+        ),
+        params,
     ).mappings().fetchall()
     return [_as_dict(row) for row in rows]
 
@@ -50,11 +65,31 @@ def dataset_exists(conn: Connection, dataset_name: str) -> bool:
     return row is not None
 
 
-def list_libraries(conn: Connection, dataset_name: Optional[str] = None) -> List[Dict[str, Any]]:
-    params: Dict[str, Any] = {}
-    dataset_filter = ""
+def dataset_accessible(conn: Connection, dataset_name: str, owner_user_id: Optional[str] = None) -> bool:
+    visibility_sql, params = _visibility_condition(owner_user_id)
+    params["dataset_name"] = dataset_name
+    row = conn.execute(
+        text(
+            f"""
+            SELECT d.id
+            FROM datasets d
+            WHERE d.name = :dataset_name AND {visibility_sql}
+            """
+        ),
+        params,
+    ).first()
+    return row is not None
+
+
+def list_libraries(
+    conn: Connection,
+    dataset_name: Optional[str] = None,
+    owner_user_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    visibility_sql, params = _visibility_condition(owner_user_id)
+    conditions = [visibility_sql]
     if dataset_name:
-        dataset_filter = "WHERE d.name = :dataset_name"
+        conditions.append("d.name = :dataset_name")
         params["dataset_name"] = dataset_name
 
     rows = conn.execute(
@@ -68,7 +103,7 @@ def list_libraries(conn: Connection, dataset_name: Optional[str] = None) -> List
             JOIN library_observations o ON o.library_id = l.id
             JOIN ios_versions iv ON iv.id = o.ios_version_id
             JOIN datasets d ON d.id = o.dataset_id
-            {dataset_filter}
+            WHERE {' AND '.join(conditions)}
             GROUP BY l.id, l.display_name, l.canonical_name
             ORDER BY l.display_name
             """
@@ -78,16 +113,21 @@ def list_libraries(conn: Connection, dataset_name: Optional[str] = None) -> List
     return [_as_dict(row) for row in rows]
 
 
-def list_ios_versions(conn: Connection) -> List[Dict[str, Any]]:
-    """Return all firmware/iOS labels known to the database."""
+def list_ios_versions(conn: Connection, owner_user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Return all firmware/iOS labels visible to the current user."""
+    visibility_sql, params = _visibility_condition(owner_user_id)
     rows = conn.execute(
         text(
+            f"""
+            SELECT DISTINCT iv.version_label, iv.device_model, iv.ios_release, iv.build_number
+            FROM ios_versions iv
+            JOIN library_observations o ON o.ios_version_id = iv.id
+            JOIN datasets d ON d.id = o.dataset_id
+            WHERE {visibility_sql}
+            ORDER BY iv.ios_release, iv.build_number, iv.device_model, iv.version_label
             """
-            SELECT version_label, device_model, ios_release, build_number
-            FROM ios_versions
-            ORDER BY ios_release, build_number, device_model, version_label
-            """
-        )
+        ),
+        params,
     ).mappings().fetchall()
     return [_as_dict(row) for row in rows]
 
@@ -99,19 +139,22 @@ def get_library_metrics(
     ios_version: Optional[str] = None,
     level: Optional[str] = None,
     metrics: Optional[Iterable[str]] = None,
+    owner_user_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Return metric observations for a library.
+    """Return metric observations for a visible library.
 
     Query semantics:
     - library is required;
     - dataset, iOS version, metric level, and exact metrics are optional;
-    - ``ios_version`` accepts either a full firmware label or parsed release.
+    - ``ios_version`` accepts either a full firmware label or parsed release;
+    - private datasets are visible only to their owner.
     """
     canonical_name = canonicalize_library_name(library_name)
     metric_list = list(metrics or [])
+    visibility_sql, visibility_params = _visibility_condition(owner_user_id)
 
-    conditions = ["l.canonical_name = :canonical_name"]
-    params: Dict[str, Any] = {"canonical_name": canonical_name}
+    conditions = ["l.canonical_name = :canonical_name", visibility_sql]
+    params: Dict[str, Any] = {"canonical_name": canonical_name, **visibility_params}
 
     if dataset_name:
         conditions.append("d.name = :dataset_name")
@@ -130,6 +173,10 @@ def get_library_metrics(
         f"""
         SELECT
             d.name AS dataset_name,
+            d.visibility AS dataset_visibility,
+            d.owner_user_id AS dataset_owner_user_id,
+            COALESCE(d.source_type, d.source) AS dataset_source_type,
+            COALESCE(d.trust_level, 'unknown') AS dataset_trust_level,
             l.display_name AS library,
             iv.version_label AS ios_version,
             iv.device_model,
@@ -163,12 +210,14 @@ def list_observations_for_ios_version(
     dataset_name: Optional[str] = None,
     level: Optional[str] = None,
     metrics: Optional[Iterable[str]] = None,
+    owner_user_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Return all library observations for one iOS version or release."""
+    """Return all visible library observations for one iOS version or release."""
     metric_list = list(metrics or [])
+    visibility_sql, visibility_params = _visibility_condition(owner_user_id)
 
-    conditions = ["(iv.version_label = :ios_version OR iv.ios_release = :ios_version)"]
-    params: Dict[str, Any] = {"ios_version": ios_version}
+    conditions = ["(iv.version_label = :ios_version OR iv.ios_release = :ios_version)", visibility_sql]
+    params: Dict[str, Any] = {"ios_version": ios_version, **visibility_params}
 
     if dataset_name:
         conditions.append("d.name = :dataset_name")
@@ -184,6 +233,10 @@ def list_observations_for_ios_version(
         f"""
         SELECT
             d.name AS dataset_name,
+            d.visibility AS dataset_visibility,
+            d.owner_user_id AS dataset_owner_user_id,
+            COALESCE(d.source_type, d.source) AS dataset_source_type,
+            COALESCE(d.trust_level, 'unknown') AS dataset_trust_level,
             l.display_name AS library,
             iv.version_label AS ios_version,
             iv.device_model,
@@ -219,6 +272,10 @@ def _group_metric_rows(rows: Iterable[RowMapping]) -> List[Dict[str, Any]]:
         if key not in grouped:
             grouped[key] = {
                 "dataset": row["dataset_name"],
+                "dataset_visibility": row.get("dataset_visibility"),
+                "dataset_owner_user_id": row.get("dataset_owner_user_id"),
+                "dataset_source_type": row.get("dataset_source_type"),
+                "dataset_trust_level": row.get("dataset_trust_level"),
                 "library": row["library"],
                 "ios_version": row["ios_version"],
                 "device_model": row["device_model"],

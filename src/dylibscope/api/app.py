@@ -12,6 +12,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.engine.url import make_url
 
+from dylibscope.api.auth import CurrentUser, get_optional_current_user
 from dylibscope.api.config import resolve_database_url
 from dylibscope.security_analysis.derived_scoring import (
     INTERPRETATION_NOTE,
@@ -21,6 +22,7 @@ from dylibscope.security_analysis.derived_scoring import (
     score_observation,
 )
 from dylibscope.storage.repository import (
+    dataset_accessible,
     get_library_metrics,
     list_datasets,
     list_ios_versions,
@@ -284,7 +286,7 @@ def create_app(
 
     app = FastAPI(
         title="DylibScope API",
-        version="0.3.0",
+        version="0.4.0",
         description="HTTP API for querying and comparing normalized DylibScope static-analysis metrics.",
     )
 
@@ -298,6 +300,20 @@ def create_app(
 
     def get_conn() -> Iterator[Connection]:
         yield from _connection_dependency(resolved_database_url)
+
+    def current_user_id(current_user: Optional[CurrentUser]) -> Optional[str]:
+        return current_user.user_id if current_user else None
+
+    def require_dataset_access(
+        conn: Connection,
+        dataset_name: Optional[str],
+        current_user: Optional[CurrentUser],
+    ) -> None:
+        if not dataset_name:
+            return
+        if dataset_accessible(conn, dataset_name, owner_user_id=current_user_id(current_user)):
+            return
+        raise HTTPException(status_code=404, detail="Dataset was not found or is not visible to the current user.")
 
     @app.get("/health")
     def health() -> Dict[str, Any]:
@@ -326,22 +342,41 @@ def create_app(
                 "error": str(exc),
             }
 
+    @app.get("/v1/auth/session")
+    def api_auth_session(
+        current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
+    ) -> Dict[str, Any]:
+        return {
+            "authenticated": current_user is not None,
+            "user_id": current_user.user_id if current_user else None,
+            "role": current_user.role if current_user else None,
+            "is_anonymous": current_user.is_anonymous if current_user else False,
+        }
+
     @app.get("/v1/datasets")
-    def api_list_datasets(conn: Connection = Depends(get_conn)) -> Dict[str, Any]:
-        items = list_datasets(conn)
+    def api_list_datasets(
+        conn: Connection = Depends(get_conn),
+        current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
+    ) -> Dict[str, Any]:
+        items = list_datasets(conn, owner_user_id=current_user_id(current_user))
         return {"count": len(items), "datasets": items}
 
     @app.get("/v1/libraries")
     def api_list_libraries(
         dataset_name: Optional[str] = Query(default=None),
         conn: Connection = Depends(get_conn),
+        current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
     ) -> Dict[str, Any]:
-        libraries = list_libraries(conn, dataset_name=dataset_name)
+        require_dataset_access(conn, dataset_name, current_user)
+        libraries = list_libraries(conn, dataset_name=dataset_name, owner_user_id=current_user_id(current_user))
         return {"count": len(libraries), "libraries": libraries}
 
     @app.get("/v1/ios-versions")
-    def api_list_ios_versions(conn: Connection = Depends(get_conn)) -> Dict[str, Any]:
-        versions = list_ios_versions(conn)
+    def api_list_ios_versions(
+        conn: Connection = Depends(get_conn),
+        current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
+    ) -> Dict[str, Any]:
+        versions = list_ios_versions(conn, owner_user_id=current_user_id(current_user))
         return {"count": len(versions), "ios_versions": versions}
 
     @app.get("/v1/ios-versions/{ios_version}/security-summary", responses={404: {"model": ErrorResponse}})
@@ -353,14 +388,17 @@ def create_app(
         metrics: Optional[str] = Query(default=None, description="Comma-separated exact metric filter."),
         limit: int = Query(default=10, ge=1, le=50, description="Maximum number of top libraries to return."),
         conn: Connection = Depends(get_conn),
+        current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
     ) -> Dict[str, Any]:
         selected_metrics = _parse_metric_filters(metric, metrics)
+        require_dataset_access(conn, dataset_name, current_user)
         observations = list_observations_for_ios_version(
             conn,
             ios_version=ios_version,
             dataset_name=dataset_name,
             level=level,
             metrics=selected_metrics,
+            owner_user_id=current_user_id(current_user),
         )
         if not observations:
             raise HTTPException(status_code=404, detail="No metrics found for the requested iOS version filter.")
@@ -389,8 +427,10 @@ def create_app(
         metric: Optional[List[str]] = Query(default=None, description="Repeatable exact metric filter."),
         metrics: Optional[str] = Query(default=None, description="Comma-separated exact metric filter."),
         conn: Connection = Depends(get_conn),
+        current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
     ) -> Dict[str, Any]:
         selected_metrics = _parse_metric_filters(metric, metrics)
+        require_dataset_access(conn, dataset_name, current_user)
         observations = get_library_metrics(
             conn,
             library_name=library_name,
@@ -398,6 +438,7 @@ def create_app(
             ios_version=ios_version,
             level=level,
             metrics=selected_metrics,
+            owner_user_id=current_user_id(current_user),
         )
         if not observations:
             raise HTTPException(status_code=404, detail="No metrics found for the requested filters.")
@@ -419,8 +460,10 @@ def create_app(
         metric: Optional[List[str]] = Query(default=None),
         metrics: Optional[str] = Query(default=None),
         conn: Connection = Depends(get_conn),
+        current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
     ) -> Dict[str, Any]:
         selected_metrics = _parse_metric_filters(metric, metrics)
+        require_dataset_access(conn, dataset_name, current_user)
         observations = get_library_metrics(
             conn,
             library_name=library_name,
@@ -428,6 +471,7 @@ def create_app(
             ios_version=None,
             level=level,
             metrics=selected_metrics,
+            owner_user_id=current_user_id(current_user),
         )
         if not observations:
             raise HTTPException(status_code=404, detail="No timeline data found for the requested filters.")
@@ -451,8 +495,10 @@ def create_app(
         metric: Optional[List[str]] = Query(default=None, description="Repeatable exact metric filter."),
         metrics: Optional[str] = Query(default=None, description="Comma-separated exact metric filter."),
         conn: Connection = Depends(get_conn),
+        current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
     ) -> Dict[str, Any]:
         selected_metrics = _parse_metric_filters(metric, metrics)
+        require_dataset_access(conn, dataset_name, current_user)
 
         if bool(from_ios_version) != bool(to_ios_version):
             raise HTTPException(
@@ -468,6 +514,7 @@ def create_app(
                 ios_version=from_ios_version,
                 level=level,
                 metrics=selected_metrics,
+                owner_user_id=current_user_id(current_user),
             )
             to_observations = get_library_metrics(
                 conn,
@@ -476,6 +523,7 @@ def create_app(
                 ios_version=to_ios_version,
                 level=level,
                 metrics=selected_metrics,
+                owner_user_id=current_user_id(current_user),
             )
             from_observation = _first_observation_for_scope(from_observations)
             to_observation = _first_observation_for_scope(to_observations)
@@ -519,6 +567,7 @@ def create_app(
             ios_version=ios_version,
             level=level,
             metrics=selected_metrics,
+            owner_user_id=current_user_id(current_user),
         )
         if not observations:
             raise HTTPException(status_code=404, detail="No metrics found for the requested security report filters.")
@@ -542,7 +591,9 @@ def create_app(
     def api_compare_libraries(
         request: CompareLibrariesRequest,
         conn: Connection = Depends(get_conn),
+        current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
     ) -> Dict[str, Any]:
+        require_dataset_access(conn, request.dataset_name, current_user)
         selected_observations: Dict[str, Dict[str, Any]] = {}
         resolved_observations: List[Dict[str, Any]] = []
         missing_libraries: List[str] = []
@@ -555,6 +606,7 @@ def create_app(
                 ios_version=request.ios_version,
                 level=request.level,
                 metrics=request.metrics,
+                owner_user_id=current_user_id(current_user),
             )
             selected = _first_observation_for_scope(observations)
             if selected:
@@ -601,7 +653,9 @@ def create_app(
         library_name: str,
         request: CompareLibraryVersionsRequest,
         conn: Connection = Depends(get_conn),
+        current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
     ) -> Dict[str, Any]:
+        require_dataset_access(conn, request.dataset_name, current_user)
         selected_observations: Dict[str, Dict[str, Any]] = {}
         resolved_observations: List[Dict[str, Any]] = []
         missing_versions: List[str] = []
@@ -614,6 +668,7 @@ def create_app(
                 ios_version=requested_version,
                 level=request.level,
                 metrics=request.metrics,
+                owner_user_id=current_user_id(current_user),
             )
             selected = _first_observation_for_scope(observations)
             if selected:

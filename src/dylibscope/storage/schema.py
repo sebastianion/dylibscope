@@ -17,12 +17,13 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
     func,
+    inspect,
     select,
 )
 from sqlalchemy.engine import Connection, Engine, make_url
 from sqlalchemy.exc import IntegrityError
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 DEFAULT_SQLITE_PATH = Path("data/dylibscope.sqlite")
 
 metadata = MetaData()
@@ -41,6 +42,9 @@ datasets = Table(
     Column("name", String, nullable=False, unique=True),
     Column("source", String, nullable=False),
     Column("visibility", String, nullable=False, server_default="public"),
+    Column("owner_user_id", String),
+    Column("source_type", String, nullable=False, server_default="public_baseline"),
+    Column("trust_level", String, nullable=False, server_default="verified_pipeline_output"),
     Column("created_at", String, nullable=False, server_default=func.current_timestamp()),
 )
 
@@ -238,13 +242,49 @@ def connect(database: Optional[Union[str, Path]] = None) -> Connection:
 
 
 def initialize_database(conn: Connection) -> None:
-    """Create schema tables and insert metric definitions."""
+    """Create schema tables, migrate additive columns, and insert metric definitions."""
     metadata.create_all(conn)
+    _ensure_dataset_provenance_columns(conn)
 
     _upsert_schema_metadata(conn, "schema_version", str(SCHEMA_VERSION))
     for name, level, value_type, description in METRIC_DEFINITIONS:
         _upsert_metric_definition(conn, name, level, value_type, description)
     conn.commit()
+
+
+def _quote_identifier(conn: Connection, name: str) -> str:
+    return conn.dialect.identifier_preparer.quote(name)
+
+
+def _column_exists(conn: Connection, table_name: str, column_name: str) -> bool:
+    return any(column["name"] == column_name for column in inspect(conn).get_columns(table_name))
+
+
+def _add_column_if_missing(conn: Connection, table_name: str, column_name: str, definition: str) -> None:
+    if _column_exists(conn, table_name, column_name):
+        return
+    conn.exec_driver_sql(
+        f"ALTER TABLE {_quote_identifier(conn, table_name)} "
+        f"ADD COLUMN {_quote_identifier(conn, column_name)} {definition}"
+    )
+
+
+def _ensure_dataset_provenance_columns(conn: Connection) -> None:
+    """Apply additive dataset ownership/provenance columns to existing databases."""
+    _add_column_if_missing(conn, "datasets", "owner_user_id", "VARCHAR")
+    _add_column_if_missing(conn, "datasets", "source_type", "VARCHAR")
+    _add_column_if_missing(conn, "datasets", "trust_level", "VARCHAR")
+
+    conn.execute(
+        datasets.update()
+        .where(datasets.c.source_type.is_(None))
+        .values(source_type="public_baseline")
+    )
+    conn.execute(
+        datasets.update()
+        .where(datasets.c.trust_level.is_(None))
+        .values(trust_level="verified_pipeline_output")
+    )
 
 
 def _upsert_schema_metadata(conn: Connection, key: str, value: str) -> None:

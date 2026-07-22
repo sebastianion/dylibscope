@@ -185,13 +185,21 @@ def get_or_create_dataset(state: ImportState, name: str, source: str = "public_b
 
     conn = state.conn
     row = conn.execute(select(datasets.c.id).where(datasets.c.name == name)).first()
+    dataset_values = {
+        "source": source,
+        "visibility": "public",
+        "owner_user_id": None,
+        "source_type": "public_baseline",
+        "trust_level": "verified_pipeline_output",
+    }
     if row:
         dataset_id = _scalar_id(row)
+        conn.execute(datasets.update().where(datasets.c.id == dataset_id).values(**dataset_values))
     else:
         dataset_id = _insert_and_fetch_id(
             conn,
             datasets,
-            {"name": name, "source": source, "visibility": "public"},
+            {"name": name, **dataset_values},
             datasets.c.name == name,
         )
     state.dataset_ids[name] = dataset_id

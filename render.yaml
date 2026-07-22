@@ -13,5 +13,15 @@ services:
         value: 3.11.9
       - key: DATABASE_URL
         sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
       - key: DYLIBSCOPE_CORS_ORIGINS
         sync: false
+      - key: DYLIBSCOPE_DB_POOL_SIZE
+        value: "3"
+      - key: DYLIBSCOPE_DB_MAX_OVERFLOW
+        value: "0"
+      - key: DYLIBSCOPE_DB_POOL_TIMEOUT
+        value: "10"
+      - key: DYLIBSCOPE_DB_POOL_RECYCLE
+        value: "300"
