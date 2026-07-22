@@ -619,3 +619,50 @@ code {
     grid-template-columns: 1fr;
   }
 }
+
+.contextStrip,
+.datasetMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.contextStrip span,
+.datasetMeta span {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #475569;
+  padding: 6px 10px;
+  font-size: 0.86rem;
+}
+
+.datasetScopeGrid {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.8fr) minmax(0, 1.2fr);
+  gap: 16px;
+  align-items: end;
+}
+
+.warningNote,
+.userDatasetBanner {
+  border: 1px solid #f59e0b;
+  border-radius: 16px;
+  background: #fffbeb;
+  color: #92400e;
+  padding: 12px 14px;
+  font-weight: 700;
+}
+
+.userDatasetBanner {
+  margin: 0 0 18px;
+}
+
+@media (max-width: 900px) {
+  .datasetScopeGrid {
+    grid-template-columns: 1fr;
+  }
+}

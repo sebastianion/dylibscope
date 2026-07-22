@@ -11,7 +11,8 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { API_BASE_URL, apiGet, apiPost } from './api.js';
+import { API_BASE_URL, apiGet, apiPost, setApiAuthToken } from './api.js';
+import { authConfigured, ensureAnonymousSession, onAuthStateChange } from './auth.js';
 import { metricDictionary, scoreDictionary } from './metricDictionary.js';
 
 const DEFAULT_DATASET = 'public-baseline';
@@ -190,6 +191,23 @@ function buildTopScoreRows(summary) {
 
 function buildMetricQuery(selectedMetrics) {
   return selectedMetrics.length ? selectedMetrics.join(',') : undefined;
+}
+
+function datasetDisplayName(dataset) {
+  return dataset?.name || DEFAULT_DATASET;
+}
+
+function datasetLabel(dataset) {
+  const name = datasetDisplayName(dataset);
+  const visibility = dataset?.visibility || 'public';
+  const trust = dataset?.trust_level || dataset?.trust || '';
+  if (name === DEFAULT_DATASET) return `${name} - public baseline`;
+  return `${name} - ${visibility}${trust ? `, ${trust}` : ''}`;
+}
+
+function isUserProvidedDataset(datasetName, datasets) {
+  const dataset = datasets.find((item) => item.name === datasetName);
+  return dataset?.source_type === 'user_manual' || dataset?.trust_level === 'user_provided_unverified';
 }
 
 function optionValue(item) {
@@ -659,7 +677,9 @@ function PublishedDashboards() {
   );
 }
 
-function Overview({ health, versionCount, libraryCount }) {
+function Overview({ health, versionCount, libraryCount, selectedDataset, datasets, authState }) {
+  const selectedDatasetInfo = datasets.find((item) => item.name === selectedDataset);
+
   return (
     <Card title="Overview">
       <div className="heroGrid">
@@ -671,6 +691,11 @@ function Overview({ health, versionCount, libraryCount }) {
           <p className="note">
             The score is a static-complexity indicator. It does not prove that a library or iOS version is vulnerable or safe.
           </p>
+          <div className="contextStrip">
+            <span>Active dataset: <strong>{selectedDataset}</strong></span>
+            <span>Auth: <strong>{authState.configured ? (authState.authenticated ? 'anonymous session active' : 'configured, not authenticated') : 'not configured'}</strong></span>
+            {selectedDatasetInfo?.trust_level ? <span>Trust: <strong>{selectedDatasetInfo.trust_level}</strong></span> : null}
+          </div>
         </div>
         <div className="statsGrid">
           <div className="stat"><span>API</span><strong>{health?.status || 'unknown'}</strong></div>
@@ -686,7 +711,44 @@ function primaryScorePayload(report) {
   return report?.observations?.[0]?.score || report || null;
 }
 
-function LibraryExplorer({ libraries, versions }) {
+function DatasetSelector({ datasets, selectedDataset, onChange, authState }) {
+  const selected = datasets.find((item) => item.name === selectedDataset);
+
+  return (
+    <Card title="Dataset scope">
+      <div className="datasetScopeGrid">
+        <label>
+          Dataset
+          <select value={selectedDataset} onChange={(event) => onChange(event.target.value)}>
+            {datasets.length ? datasets.map((dataset) => (
+              <option key={dataset.name} value={dataset.name}>{datasetLabel(dataset)}</option>
+            )) : <option value={DEFAULT_DATASET}>{DEFAULT_DATASET}</option>}
+          </select>
+        </label>
+        <div className="datasetMeta">
+          <span>Visibility: <strong>{selected?.visibility || 'public'}</strong></span>
+          <span>Source: <strong>{selected?.source_type || 'public_baseline'}</strong></span>
+          <span>Trust: <strong>{selected?.trust_level || 'verified_pipeline_output'}</strong></span>
+        </div>
+      </div>
+      <p className="note">
+        Public data is available without a user session. Private user datasets become visible when the browser has an anonymous Supabase Auth session.
+      </p>
+      {!authState.configured ? (
+        <p className="warningNote">
+          Supabase Auth is not configured for this UI deployment. Only public datasets will be available.
+        </p>
+      ) : null}
+      {selected?.trust_level === 'user_provided_unverified' ? (
+        <p className="warningNote">
+          User-provided observations are not independently verified by DylibScope. Scores, summaries, comparisons, and security indicators are computed from the values entered by the user.
+        </p>
+      ) : null}
+    </Card>
+  );
+}
+
+function LibraryExplorer({ libraries, versions, datasetName }) {
   const [library, setLibrary] = useState('libsqlite3.0.dylib');
   const [iosVersion, setIosVersion] = useState('');
   const [selectedMetrics, setSelectedMetrics] = useState([]);
@@ -716,7 +778,7 @@ function LibraryExplorer({ libraries, versions }) {
       setVersionsLoading(true);
       try {
         const response = await apiGet(`/v1/libraries/${encodeURIComponent(library)}/timeline`, {
-          dataset_name: DEFAULT_DATASET,
+          dataset_name: datasetName,
         });
         if (cancelled) return;
         const timelineRows = response.timeline || [];
@@ -743,7 +805,7 @@ function LibraryExplorer({ libraries, versions }) {
     return () => {
       cancelled = true;
     };
-  }, [library]);
+  }, [library, datasetName]);
 
   async function loadLibrary() {
     setLoading(true);
@@ -752,12 +814,12 @@ function LibraryExplorer({ libraries, versions }) {
     setReport(null);
     try {
       const metricQuery = {
-        dataset_name: DEFAULT_DATASET,
+        dataset_name: datasetName,
         ios_version: iosVersion || undefined,
         metrics: buildMetricQuery(selectedMetrics),
       };
       const reportQuery = {
-        dataset_name: DEFAULT_DATASET,
+        dataset_name: datasetName,
         ios_version: iosVersion || undefined,
       };
       const [metricsResponse, reportResponse] = await Promise.all([
@@ -904,7 +966,7 @@ function LibraryExplorer({ libraries, versions }) {
   );
 }
 
-function CompareLibraries({ libraries, versions }) {
+function CompareLibraries({ libraries, versions, datasetName }) {
   const libraryOptions = useMemo(() => buildLibraryOptions(libraries), [libraries]);
   const versionOptions = useMemo(() => buildVersionChoices(versions), [versions]);
   const [selectedLibraries, setSelectedLibraries] = useState(DEFAULT_COMPARE_LIBRARIES);
@@ -936,7 +998,7 @@ function CompareLibraries({ libraries, versions }) {
     try {
       const response = await apiPost('/v1/libraries/compare', {
         libraries: selectedLibraries,
-        dataset_name: DEFAULT_DATASET,
+        dataset_name: datasetName,
         ios_version: iosVersion,
         metrics: selectedMetrics.length ? selectedMetrics : undefined,
       });
@@ -981,7 +1043,7 @@ function CompareLibraries({ libraries, versions }) {
   );
 }
 
-function CompareVersions({ libraries }) {
+function CompareVersions({ libraries, datasetName }) {
   const libraryOptions = useMemo(() => buildLibraryOptions(libraries), [libraries]);
   const [library, setLibrary] = useState('libsqlite3.0.dylib');
   const [versionOptions, setVersionOptions] = useState([]);
@@ -1007,7 +1069,7 @@ function CompareVersions({ libraries }) {
       setVersionsLoading(true);
       try {
         const response = await apiGet(`/v1/libraries/${encodeURIComponent(library)}/timeline`, {
-          dataset_name: DEFAULT_DATASET,
+          dataset_name: datasetName,
         });
         if (cancelled) return;
         const choices = buildObservationVersionChoices(response.timeline || []);
@@ -1035,7 +1097,7 @@ function CompareVersions({ libraries }) {
     return () => {
       cancelled = true;
     };
-  }, [library]);
+  }, [library, datasetName]);
 
   async function compare() {
     setLoading(true);
@@ -1043,7 +1105,7 @@ function CompareVersions({ libraries }) {
     setData(null);
     try {
       const response = await apiPost(`/v1/libraries/${encodeURIComponent(library)}/compare-versions`, {
-        dataset_name: DEFAULT_DATASET,
+        dataset_name: datasetName,
         ios_versions: selectedVersions,
         metrics: selectedMetrics.length ? selectedMetrics : undefined,
       });
@@ -1088,7 +1150,7 @@ function CompareVersions({ libraries }) {
   );
 }
 
-function VersionSummary({ versions }) {
+function VersionSummary({ versions, datasetName }) {
   const versionOptions = useMemo(() => buildVersionChoices(versions), [versions]);
   const [iosVersion, setIosVersion] = useState('10.3.3');
   const [data, setData] = useState(null);
@@ -1108,7 +1170,7 @@ function VersionSummary({ versions }) {
     setData(null);
     try {
       const response = await apiGet(`/v1/ios-versions/${encodeURIComponent(iosVersion)}/security-summary`, {
-        dataset_name: DEFAULT_DATASET,
+        dataset_name: datasetName,
         limit: 10,
       });
       setData(response);
@@ -1262,25 +1324,120 @@ export default function App() {
   const [health, setHealth] = useState(null);
   const [libraries, setLibraries] = useState([]);
   const [versions, setVersions] = useState([]);
+  const [datasets, setDatasets] = useState([]);
+  const [selectedDataset, setSelectedDataset] = useState(DEFAULT_DATASET);
   const [loadError, setLoadError] = useState('');
+  const [authState, setAuthState] = useState({
+    configured: authConfigured,
+    loading: true,
+    authenticated: false,
+    userId: null,
+    isAnonymous: false,
+    error: '',
+  });
 
   useEffect(() => {
-    async function bootstrap() {
+    let cancelled = false;
+
+    async function initializeAuth() {
+      const result = await ensureAnonymousSession();
+      if (cancelled) return;
+
+      if (result.session?.access_token) {
+        setApiAuthToken(result.session.access_token);
+      }
+
+      setAuthState({
+        configured: result.configured,
+        loading: false,
+        authenticated: Boolean(result.session?.access_token),
+        userId: result.user?.id || null,
+        isAnonymous: Boolean(result.user?.is_anonymous || result.user?.app_metadata?.provider === 'anonymous'),
+        error: result.error?.message || '',
+      });
+    }
+
+    initializeAuth();
+
+    const subscription = onAuthStateChange((session) => {
+      setApiAuthToken(session?.access_token || null);
+      setAuthState((current) => ({
+        ...current,
+        loading: false,
+        authenticated: Boolean(session?.access_token),
+        userId: session?.user?.id || null,
+        isAnonymous: Boolean(session?.user?.is_anonymous || session?.user?.app_metadata?.provider === 'anonymous'),
+        error: '',
+      }));
+    });
+
+    return () => {
+      cancelled = true;
+      subscription?.unsubscribe?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadDatasets() {
+      try {
+        const response = await apiGet('/v1/datasets');
+        if (cancelled) return;
+        const availableDatasets = response.datasets || [];
+        setDatasets(availableDatasets);
+        if (availableDatasets.length && !availableDatasets.some((dataset) => dataset.name === selectedDataset)) {
+          setSelectedDataset(availableDatasets[0].name);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setLoadError(err.message);
+          setDatasets([{ name: DEFAULT_DATASET, visibility: 'public', source_type: 'public_baseline', trust_level: 'verified_pipeline_output' }]);
+        }
+      }
+    }
+
+    if (!authState.loading) {
+      loadDatasets();
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authState.loading, authState.authenticated]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadDatasetScopedData() {
+      setLoadError('');
       try {
         const [healthResponse, librariesResponse, versionsResponse] = await Promise.all([
           apiGet('/health'),
-          apiGet('/v1/libraries', { dataset_name: DEFAULT_DATASET }),
+          apiGet('/v1/libraries', { dataset_name: selectedDataset }),
           apiGet('/v1/ios-versions'),
         ]);
+        if (cancelled) return;
         setHealth(healthResponse);
         setLibraries(librariesResponse.libraries || []);
         setVersions(versionsResponse.ios_versions || []);
       } catch (err) {
-        setLoadError(err.message);
+        if (!cancelled) {
+          setLoadError(err.message);
+          setLibraries([]);
+          setVersions([]);
+        }
       }
     }
-    bootstrap();
-  }, []);
+
+    if (!authState.loading && selectedDataset) {
+      loadDatasetScopedData();
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authState.loading, authState.authenticated, selectedDataset]);
 
   return (
     <main>
@@ -1291,13 +1448,31 @@ export default function App() {
         </div>
         <a href={`${API_BASE_URL}/docs`} target="_blank" rel="noreferrer">API docs</a>
       </header>
-      <ErrorBox error={loadError} />
-      <Overview health={health} libraryCount={libraries.length} versionCount={versions.length} />
+      <ErrorBox error={loadError || authState.error} />
+      <Overview
+        health={health}
+        libraryCount={libraries.length}
+        versionCount={versions.length}
+        selectedDataset={selectedDataset}
+        datasets={datasets}
+        authState={authState}
+      />
+      <DatasetSelector
+        datasets={datasets}
+        selectedDataset={selectedDataset}
+        onChange={setSelectedDataset}
+        authState={authState}
+      />
+      {isUserProvidedDataset(selectedDataset, datasets) ? (
+        <div className="userDatasetBanner">
+          User-provided dataset selected. DylibScope will compute scores and security summaries from user-provided values, which may be incomplete or incorrect.
+        </div>
+      ) : null}
       <PublishedDashboards />
-      <LibraryExplorer libraries={libraries} versions={versions} />
-      <CompareLibraries libraries={libraries} versions={versions} />
-      <CompareVersions libraries={libraries} />
-      <VersionSummary versions={versions} />
+      <LibraryExplorer libraries={libraries} versions={versions} datasetName={selectedDataset} />
+      <CompareLibraries libraries={libraries} versions={versions} datasetName={selectedDataset} />
+      <CompareVersions libraries={libraries} datasetName={selectedDataset} />
+      <VersionSummary versions={versions} datasetName={selectedDataset} />
       <MetricReference />
     </main>
   );

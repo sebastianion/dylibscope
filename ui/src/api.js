@@ -2,6 +2,12 @@ const DEFAULT_API_BASE_URL = 'http://127.0.0.1:8000';
 
 export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || DEFAULT_API_BASE_URL).replace(/\/$/, '');
 
+let accessToken = null;
+
+export function setApiAuthToken(token) {
+  accessToken = token || null;
+}
+
 function buildUrl(path, params = {}) {
   const url = new URL(`${API_BASE_URL}${path}`);
   Object.entries(params).forEach(([key, value]) => {
@@ -17,9 +23,23 @@ function buildUrl(path, params = {}) {
   return url.toString();
 }
 
+function buildHeaders(extraHeaders = {}) {
+  const headers = { ...extraHeaders };
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`;
+  }
+  return headers;
+}
+
+async function parsePayload(response) {
+  return response.json().catch(() => ({}));
+}
+
 export async function apiGet(path, params = {}) {
-  const response = await fetch(buildUrl(path, params));
-  const payload = await response.json().catch(() => ({}));
+  const response = await fetch(buildUrl(path, params), {
+    headers: buildHeaders(),
+  });
+  const payload = await parsePayload(response);
   if (!response.ok) {
     throw new Error(payload.detail || `Request failed with status ${response.status}`);
   }
@@ -29,12 +49,10 @@ export async function apiGet(path, params = {}) {
 export async function apiPost(path, body = {}) {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers: buildHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(body),
   });
-  const payload = await response.json().catch(() => ({}));
+  const payload = await parsePayload(response);
   if (!response.ok) {
     throw new Error(payload.detail || `Request failed with status ${response.status}`);
   }
