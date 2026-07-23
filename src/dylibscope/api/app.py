@@ -9,19 +9,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.engine.url import make_url
+from sqlalchemy.exc import SQLAlchemyError
 
-from dylibscope.api.auth import CurrentUser, get_optional_current_user
+from dylibscope.api.auth import CurrentUser, get_optional_current_user, require_current_user
 from dylibscope.api.config import resolve_database_url
 from dylibscope.security_analysis.derived_scoring import (
     INTERPRETATION_NOTE,
+    METRIC_WEIGHTS,
     build_library_security_report,
     build_version_security_summary,
     compare_observation_scores,
     score_observation,
 )
 from dylibscope.storage.repository import (
+    create_user_manual_observation,
     dataset_accessible,
     get_library_metrics,
     list_datasets,
@@ -32,6 +34,63 @@ from dylibscope.storage.repository import (
 from dylibscope.storage.schema import connect
 
 MetricLevel = Literal["high", "low", "all"]
+
+PUBLIC_BASELINE_DATASET_NAME = "public-baseline"
+USER_PROVIDED_WARNING = (
+    "User-provided observations are not independently verified by DylibScope. Scores, summaries, "
+    "comparisons, and security indicators are computed from the values supplied by the user. "
+    "Incorrect or incomplete entries may produce misleading results."
+)
+
+
+class UserObservationRequest(BaseModel):
+    """Manual user-provided observation inserted into a private dataset."""
+
+    dataset_name: str = Field(..., description="Private user dataset to create or update. Cannot be public-baseline.")
+    library: str = Field(..., description="Library basename, for example libExample.dylib.")
+    ios_version: str = Field(..., description="Full firmware label or user-supplied iOS version label.")
+    metrics: Dict[str, Any] = Field(..., description="Schema-valid metric names and values.")
+    original_path: Optional[str] = Field(default=None, description="Optional source path for the observation.")
+
+    @field_validator("dataset_name")
+    @classmethod
+    def validate_dataset_name(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("dataset_name is required.")
+        if cleaned == PUBLIC_BASELINE_DATASET_NAME:
+            raise ValueError("public-baseline is read-only and cannot receive user-provided observations.")
+        return cleaned
+
+    @field_validator("library")
+    @classmethod
+    def validate_library(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("library is required.")
+        if not cleaned.lower().endswith(".dylib"):
+            raise ValueError("library must be a dynamic-library basename ending in .dylib.")
+        return cleaned
+
+    @field_validator("ios_version")
+    @classmethod
+    def validate_ios_version(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("ios_version is required.")
+        return cleaned
+
+    @field_validator("metrics")
+    @classmethod
+    def validate_metrics(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        if not value:
+            raise ValueError("at least one metric is required.")
+        cleaned = {str(key).strip(): metric_value for key, metric_value in value.items() if str(key).strip()}
+        if not cleaned:
+            raise ValueError("at least one metric is required.")
+        if not any(metric_name in METRIC_WEIGHTS for metric_name in cleaned):
+            raise ValueError("at least one score-relevant weighted metric is required.")
+        return cleaned
 
 
 class CompareLibrariesRequest(BaseModel):
@@ -201,7 +260,10 @@ def _build_metric_comparison_results(
 
     rows: List[Dict[str, Any]] = []
     for metric_name in metric_names:
-        values = {entity: _metric_value(observation, metric_name) for entity, observation in entity_observations.items()}
+        values = {
+            entity: _metric_value(observation, metric_name)
+            for entity, observation in entity_observations.items()
+        }
         numeric_summary = _summarize_numeric_values(values)
         rows.append(
             {
@@ -236,7 +298,10 @@ def _build_version_evolution_results(
 
     rows: List[Dict[str, Any]] = []
     for metric_name in metric_names:
-        values = {version: _metric_value(observation, metric_name) for version, observation in version_observations.items()}
+        values = {
+            version: _metric_value(observation, metric_name)
+            for version, observation in version_observations.items()
+        }
         numeric_summary = _summarize_numeric_values(values)
         first_value = _metric_value(first_observation, metric_name)
         last_value = _metric_value(last_observation, metric_name)
@@ -360,6 +425,38 @@ def create_app(
     ) -> Dict[str, Any]:
         items = list_datasets(conn, owner_user_id=current_user_id(current_user))
         return {"count": len(items), "datasets": items}
+
+    @app.post("/v1/user-observations", status_code=201)
+    def api_create_user_observation(
+        request: UserObservationRequest,
+        conn: Connection = Depends(get_conn),
+        current_user: CurrentUser = Depends(require_current_user),
+    ) -> Dict[str, Any]:
+        try:
+            observation = create_user_manual_observation(
+                conn,
+                dataset_name=request.dataset_name,
+                owner_user_id=current_user.user_id,
+                library_name=request.library,
+                ios_version=request.ios_version,
+                metrics=request.metrics,
+                original_path=request.original_path,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return {
+            "operation": "upserted_user_observation",
+            "dataset_name": request.dataset_name,
+            "dataset_visibility": "private",
+            "dataset_source_type": "user_manual",
+            "dataset_trust_level": "user_provided_unverified",
+            "library": request.library,
+            "ios_version": request.ios_version,
+            "metric_count": len(request.metrics),
+            "warning": USER_PROVIDED_WARNING,
+            "observation": observation,
+        }
 
     @app.get("/v1/libraries")
     def api_list_libraries(
@@ -528,7 +625,10 @@ def create_app(
             from_observation = _first_observation_for_scope(from_observations)
             to_observation = _first_observation_for_scope(to_observations)
             if not from_observation or not to_observation:
-                raise HTTPException(status_code=404, detail="Metrics were not found for both requested transition endpoints.")
+                raise HTTPException(
+                    status_code=404,
+                    detail="Metrics were not found for both requested transition endpoints.",
+                )
             return {
                 "report_type": "library_transition_security_report",
                 "library": library_name,
@@ -631,7 +731,11 @@ def create_app(
             "comparison_type": "libraries_same_scope",
             "summary": (
                 f"Compared {len(selected_observations)} libraries"
-                + (f" for iOS filter '{request.ios_version}'" if request.ios_version else " across the first matching observation")
+                + (
+                    f" for iOS filter '{request.ios_version}'"
+                    if request.ios_version
+                    else " across the first matching observation"
+                )
                 + "."
             ),
             "dataset_name": request.dataset_name,
@@ -639,7 +743,10 @@ def create_app(
             "level_filter": request.level,
             "metric_filter": request.metrics,
             "comparison_basis": "static_metric_comparison",
-            "interpretation_note": "Higher static metric values may indicate larger complexity or interface surface, but they do not prove vulnerabilities.",
+            "interpretation_note": (
+                "Higher static metric values may indicate larger complexity or interface surface, "
+                "but they do not prove vulnerabilities."
+            ),
             "requested_count": len(request.libraries),
             "matched_count": len(selected_observations),
             "missing_libraries": missing_libraries,
@@ -702,7 +809,10 @@ def create_app(
             "level_filter": request.level,
             "metric_filter": request.metrics,
             "comparison_basis": "static_metric_evolution",
-            "interpretation_note": "Metric increases indicate static growth or complexity growth, not necessarily a security regression.",
+            "interpretation_note": (
+                "Metric increases indicate static growth or complexity growth, "
+                "not necessarily a security regression."
+            ),
             "matched_count": len(selected_observations),
             "missing_ios_versions": missing_versions,
             "resolved_observations": resolved_observations,
