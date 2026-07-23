@@ -885,58 +885,16 @@ function LibraryExplorer({ libraries, versions, datasetName }) {
         </div>
       ) : null}
       <MetricSelector selected={selectedMetrics} onChange={setSelectedMetrics} />
-      <LoadingButton loading={loading} disabled={!library || !iosVersion} onClick={loadLibrary}>Load library</LoadingButton>
+      <LoadingButton loading={loading} disabled={!library || !iosVersion} onClick={loadLibrary}>Load metrics and report</LoadingButton>
       <ErrorBox error={error} />
-      {scorePayload ? (
-        <div className="reportGrid">
-          <div className="scoreBox">
-            <span>Score</span>
-            <strong>{formatScalarValue(scorePayload.score)}</strong>
-          </div>
-          <div className="scoreBox">
-            <span>Band</span>
-            <StatusPill value={scorePayload.band} />
-          </div>
-          <div className="scoreBox">
-            <span>Confidence</span>
-            <StatusPill value={scorePayload.confidence} />
-          </div>
-        </div>
-      ) : null}
-      {scorePayload?.risk_points?.length ? (
-        <div>
-          <h3>Risk points</h3>
-          <div className="tagRow">
-            {scorePayload.risk_points.map((point) => <span className="tag" key={point}>{point}</span>)}
-          </div>
-        </div>
-      ) : null}
-      {scorePayload?.top_contributors?.length ? (
-        <div>
-          <h3>Top contributors</h3>
-          <div className="tableWrap">
-            <table>
-              <thead>
-                <tr><th>Metric</th><th>Raw value</th><th>Normalized</th><th>Weight</th><th>Points</th></tr>
-              </thead>
-              <tbody>
-                {scorePayload.top_contributors.map((item) => (
-                  <tr key={item.metric}>
-                    <td>{item.metric}</td>
-                    <td>{formatScalarValue(item.raw_value)}</td>
-                    <td>{formatScalarValue(item.normalized_value)}</td>
-                    <td>{formatScalarValue(item.weight)}</td>
-                    <td>{formatScalarValue(item.weighted_points)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      ) : null}
       {metricEntries.length ? (
-        <div>
-          <h3>Metrics</h3>
+        <section className="libraryResultSection">
+          <h3>Selected metrics</h3>
+          <p className="sectionIntro">
+            {selectedMetrics.length
+              ? 'Showing only the metrics selected above. The full security report below is still computed from the complete weighted metric profile for this library/version.'
+              : 'Showing all metrics returned for this library/version.'}
+          </p>
           <div className="tableWrap">
             <table className="metricsTable">
               <colgroup>
@@ -960,7 +918,60 @@ function LibraryExplorer({ libraries, versions, datasetName }) {
               </tbody>
             </table>
           </div>
-        </div>
+        </section>
+      ) : null}
+      {scorePayload ? (
+        <section className="libraryResultSection fullSecurityReport">
+          <h3>Full security report</h3>
+          <p className="sectionIntro">
+            This score is computed from the complete weighted metric profile for this library/version, not only from the selected metrics shown above.
+          </p>
+          <div className="reportGrid">
+            <div className="scoreBox">
+              <span>Score</span>
+              <strong>{formatScalarValue(scorePayload.score)}</strong>
+            </div>
+            <div className="scoreBox">
+              <span>Band</span>
+              <StatusPill value={scorePayload.band} />
+            </div>
+            <div className="scoreBox">
+              <span>Confidence</span>
+              <StatusPill value={scorePayload.confidence} />
+            </div>
+          </div>
+          {scorePayload.risk_points?.length ? (
+            <div>
+              <h3>Risk points</h3>
+              <div className="tagRow">
+                {scorePayload.risk_points.map((point) => <span className="tag" key={point}>{point}</span>)}
+              </div>
+            </div>
+          ) : null}
+          {scorePayload.top_contributors?.length ? (
+            <div>
+              <h3>Top contributors</h3>
+              <div className="tableWrap">
+                <table>
+                  <thead>
+                    <tr><th>Metric</th><th>Raw value</th><th>Normalized</th><th>Weight</th><th>Points</th></tr>
+                  </thead>
+                  <tbody>
+                    {scorePayload.top_contributors.map((item) => (
+                      <tr key={item.metric}>
+                        <td>{item.metric}</td>
+                        <td>{formatScalarValue(item.raw_value)}</td>
+                        <td>{formatScalarValue(item.normalized_value)}</td>
+                        <td>{formatScalarValue(item.weight)}</td>
+                        <td>{formatScalarValue(item.weighted_points)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
+        </section>
       ) : null}
     </Card>
   );
