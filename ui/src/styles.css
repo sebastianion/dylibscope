@@ -685,3 +685,109 @@ code {
   border-top: 1px solid #e2e8f0;
   padding-top: 18px;
 }
+
+.manualFormGrid,
+.manualMetricGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 14px 0;
+}
+
+.manualMetricGroup {
+  border: 1px solid #e2e8f0;
+  border-radius: 18px;
+  background: #f8fafc;
+  padding: 14px;
+  margin: 14px 0;
+}
+
+.manualMetricHeader h3 {
+  margin: 0 0 4px;
+}
+
+.manualMetricHeader p {
+  margin: 0;
+}
+
+.manualMetricGrid label {
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #fff;
+  padding: 10px;
+}
+
+.manualMetricGrid label > span {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.manualMetricGrid textarea {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  border: 1px solid #cbd5e1;
+  border-radius: 14px;
+  padding: 10px 12px;
+  font: inherit;
+  background: #fff;
+}
+
+.wideMetricInput {
+  grid-column: span 2;
+}
+
+.weightedBadge,
+.contextBadge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 3px 7px;
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.weightedBadge {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.contextBadge {
+  background: #e2e8f0;
+  color: #475569;
+}
+
+.schemaHint,
+.successBox {
+  border: 1px solid #bae6fd;
+  border-radius: 16px;
+  background: #f0f9ff;
+  color: #075985;
+  padding: 12px 14px;
+  margin: 14px 0;
+}
+
+.successBox {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.successBox p {
+  margin: 8px 0 0;
+}
+
+@media (max-width: 900px) {
+  .manualFormGrid,
+  .manualMetricGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .wideMetricInput {
+    grid-column: auto;
+  }
+}

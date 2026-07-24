@@ -41,6 +41,48 @@ const PUBLISHED_PLOTS = [
 ];
 const CHART_PALETTE = ['#0f172a', '#2563eb', '#16a34a', '#d97706', '#dc2626', '#7c3aed'];
 
+const MANUAL_WEIGHTED_METRICS = new Set([
+  'num_symbols',
+  'imported_function_count',
+  'num_sections',
+  'cfg_edge_count',
+  'allocation_call_count',
+  'mach_port_function_count',
+  'syscall_function_count',
+]);
+
+const MANUAL_METRIC_GROUPS = [
+  {
+    title: 'High-level metrics',
+    description: 'LIEF-style Mach-O metadata. At least one score-relevant weighted metric is required.',
+    fields: [
+      { name: 'num_symbols', label: 'Number of symbols', type: 'number', weighted: true, placeholder: '1200' },
+      { name: 'imported_function_count', label: 'Imported function count', type: 'number', weighted: true, placeholder: '210' },
+      { name: 'num_sections', label: 'Number of sections', type: 'number', weighted: true, placeholder: '14' },
+      { name: 'exported_function_count', label: 'Exported function count', type: 'number', weighted: false, placeholder: '80' },
+      { name: 'deployment_target', label: 'Deployment target', type: 'text', weighted: false, placeholder: '17.0.0' },
+      { name: 'imported_functions', label: 'Imported functions', type: 'list', weighted: false, placeholder: '_malloc\n_free' },
+      { name: 'exported_functions', label: 'Exported functions', type: 'list', weighted: false, placeholder: '_sqlite3_open\n_sqlite3_close' },
+    ],
+  },
+  {
+    title: 'Low-level metrics',
+    description: 'Ghidra-style implementation metrics. These values can also contribute to scoring when provided.',
+    fields: [
+      { name: 'cfg_edge_count', label: 'CFG edge count', type: 'number', weighted: true, placeholder: '4200' },
+      { name: 'allocation_call_count', label: 'Allocation call count', type: 'number', weighted: true, placeholder: '45' },
+      { name: 'mach_port_function_count', label: 'Mach-port function count', type: 'number', weighted: true, placeholder: '3' },
+      { name: 'syscall_function_count', label: 'Syscall function count', type: 'number', weighted: true, placeholder: '2' },
+      { name: 'internal_function_count', label: 'Internal function count', type: 'number', weighted: false, placeholder: '160' },
+      { name: 'internal_variable_count', label: 'Internal variable count', type: 'number', weighted: false, placeholder: '40' },
+    ],
+  },
+];
+
+const MANUAL_EMPTY_VALUES = MANUAL_METRIC_GROUPS
+  .flatMap((group) => group.fields)
+  .reduce((acc, field) => ({ ...acc, [field.name]: '' }), {});
+
 
 function isFiniteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value);
@@ -651,6 +693,221 @@ function TopScoresChart({ rows }) {
         </ResponsiveContainer>
       </div>
     </ChartPanel>
+  );
+}
+
+
+function parseManualList(value) {
+  return String(value || '')
+    .split(/[\n,;]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function buildManualObservationPayload(form, metricValues) {
+  const metrics = {};
+  const errors = [];
+
+  Object.entries(metricValues).forEach(([name, rawValue]) => {
+    const value = typeof rawValue === 'string' ? rawValue.trim() : rawValue;
+    if (value === '' || value === null || value === undefined) {
+      return;
+    }
+
+    const field = MANUAL_METRIC_GROUPS.flatMap((group) => group.fields).find((item) => item.name === name);
+    if (field?.type === 'number') {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed) || parsed < 0 || !Number.isInteger(parsed)) {
+        errors.push(`${name} must be a non-negative integer.`);
+        return;
+      }
+      metrics[name] = parsed;
+      return;
+    }
+
+    if (field?.type === 'list') {
+      const parsed = parseManualList(value);
+      if (parsed.length) {
+        metrics[name] = parsed;
+      }
+      return;
+    }
+
+    metrics[name] = String(value);
+  });
+
+  if (!form.datasetName.trim()) {
+    errors.push('Dataset name is required.');
+  }
+  if (form.datasetName.trim() === DEFAULT_DATASET) {
+    errors.push('public-baseline is read-only. Choose a private dataset name.');
+  }
+  if (!form.library.trim()) {
+    errors.push('Library name is required.');
+  }
+  if (form.library.trim() && !form.library.trim().toLowerCase().endsWith('.dylib')) {
+    errors.push('Library name must end in .dylib.');
+  }
+  if (!form.iosVersion.trim()) {
+    errors.push('iOS version label is required.');
+  }
+  if (!Object.keys(metrics).length) {
+    errors.push('At least one metric value is required.');
+  }
+  if (!Object.keys(metrics).some((name) => MANUAL_WEIGHTED_METRICS.has(name))) {
+    errors.push('At least one score-relevant weighted metric is required.');
+  }
+
+  return {
+    errors,
+    payload: {
+      dataset_name: form.datasetName.trim(),
+      library: form.library.trim(),
+      ios_version: form.iosVersion.trim(),
+      original_path: form.originalPath.trim() || undefined,
+      metrics,
+    },
+  };
+}
+
+function UserObservationForm({ authState, onObservationCreated }) {
+  const [form, setForm] = useState(() => ({
+    datasetName: `manual-smoke-${Date.now()}`,
+    library: 'libManualTest.dylib',
+    iosVersion: 'iPhone15,2_17.0_21A329',
+    originalPath: '',
+  }));
+  const [metricValues, setMetricValues] = useState({
+    ...MANUAL_EMPTY_VALUES,
+    num_symbols: '1200',
+    imported_function_count: '210',
+    num_sections: '14',
+    cfg_edge_count: '4200',
+    allocation_call_count: '45',
+    mach_port_function_count: '3',
+    syscall_function_count: '2',
+    deployment_target: '17.0.0',
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [result, setResult] = useState(null);
+
+  function updateForm(key, value) {
+    setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function updateMetric(name, value) {
+    setMetricValues((current) => ({ ...current, [name]: value }));
+  }
+
+  async function submitObservation() {
+    setError('');
+    setResult(null);
+    const { errors, payload } = buildManualObservationPayload(form, metricValues);
+    if (errors.length) {
+      setError(errors.join(' '));
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await apiPost('/v1/user-observations', payload);
+      setResult(response);
+      onObservationCreated?.(response.dataset_name || payload.dataset_name);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const disabledReason = !authState.configured
+    ? 'Supabase Auth is not configured for this UI deployment.'
+    : !authState.authenticated
+      ? 'Anonymous session is still loading or unavailable.'
+      : '';
+
+  return (
+    <Card title="Add manual observation">
+      <p className="warningNote">
+        User-provided observations are not independently verified by DylibScope. Scores, summaries, comparisons, and security indicators are computed from the values you enter.
+      </p>
+      <p className="note">
+        Use this form to create a private dataset entry without running LIEF or Ghidra. The backend validates the schema and stores the observation under your anonymous Supabase session.
+      </p>
+      <div className="manualFormGrid">
+        <label>
+          Private dataset name
+          <input value={form.datasetName} onChange={(event) => updateForm('datasetName', event.target.value)} placeholder="my-manual-dataset" />
+        </label>
+        <label>
+          Library basename
+          <input value={form.library} onChange={(event) => updateForm('library', event.target.value)} placeholder="libExample.dylib" />
+        </label>
+        <label>
+          iOS version label
+          <input value={form.iosVersion} onChange={(event) => updateForm('iosVersion', event.target.value)} placeholder="iPhone15,2_17.0_21A329" />
+        </label>
+        <label>
+          Optional original path
+          <input value={form.originalPath} onChange={(event) => updateForm('originalPath', event.target.value)} placeholder="/usr/lib/libExample.dylib" />
+        </label>
+      </div>
+
+      <div className="schemaHint">
+        <strong>Schema rule:</strong> metric names must match the DylibScope metric schema. Numeric count metrics must be non-negative integers. At least one weighted metric is required for scoring.
+      </div>
+
+      {MANUAL_METRIC_GROUPS.map((group) => (
+        <section className="manualMetricGroup" key={group.title}>
+          <div className="manualMetricHeader">
+            <h3>{group.title}</h3>
+            <p className="muted">{group.description}</p>
+          </div>
+          <div className="manualMetricGrid">
+            {group.fields.map((field) => (
+              <label key={field.name} className={field.type === 'list' ? 'wideMetricInput' : ''}>
+                <span>
+                  {field.label}
+                  {field.weighted ? <span className="weightedBadge">weighted</span> : <span className="contextBadge">context</span>}
+                </span>
+                {field.type === 'list' ? (
+                  <textarea
+                    value={metricValues[field.name] || ''}
+                    onChange={(event) => updateMetric(field.name, event.target.value)}
+                    placeholder={field.placeholder}
+                    rows={3}
+                  />
+                ) : (
+                  <input
+                    type={field.type === 'number' ? 'number' : 'text'}
+                    min={field.type === 'number' ? '0' : undefined}
+                    step={field.type === 'number' ? '1' : undefined}
+                    value={metricValues[field.name] || ''}
+                    onChange={(event) => updateMetric(field.name, event.target.value)}
+                    placeholder={field.placeholder}
+                  />
+                )}
+                <code>{field.name}</code>
+              </label>
+            ))}
+          </div>
+        </section>
+      ))}
+
+      {disabledReason ? <p className="warningNote">{disabledReason}</p> : null}
+      <LoadingButton loading={loading} disabled={Boolean(disabledReason)} onClick={submitObservation}>Create manual observation</LoadingButton>
+      <ErrorBox error={error} />
+      {result ? (
+        <div className="successBox">
+          <strong>Manual observation saved.</strong>
+          <p>
+            Dataset <code>{result.dataset_name}</code> is private, user-provided, and now available in the dataset selector.
+          </p>
+          <p className="muted">Metric count: {result.metric_count}. Library: <code>{result.library}</code>. iOS version: <code>{result.ios_version}</code>.</p>
+        </div>
+      ) : null}
+    </Card>
   );
 }
 
@@ -1337,6 +1594,7 @@ export default function App() {
   const [versions, setVersions] = useState([]);
   const [datasets, setDatasets] = useState([]);
   const [selectedDataset, setSelectedDataset] = useState(DEFAULT_DATASET);
+  const [datasetRefreshKey, setDatasetRefreshKey] = useState(0);
   const [loadError, setLoadError] = useState('');
   const [authState, setAuthState] = useState({
     configured: authConfigured,
@@ -1415,7 +1673,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [authState.loading, authState.authenticated]);
+  }, [authState.loading, authState.authenticated, datasetRefreshKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1473,6 +1731,13 @@ export default function App() {
         selectedDataset={selectedDataset}
         onChange={setSelectedDataset}
         authState={authState}
+      />
+      <UserObservationForm
+        authState={authState}
+        onObservationCreated={(datasetName) => {
+          setSelectedDataset(datasetName);
+          setDatasetRefreshKey((value) => value + 1);
+        }}
       />
       {isUserProvidedDataset(selectedDataset, datasets) ? (
         <div className="userDatasetBanner">
