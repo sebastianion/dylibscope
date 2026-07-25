@@ -813,3 +813,93 @@ code {
     grid-template-columns: 1fr;
   }
 }
+
+
+/* Multi-section app layout */
+.appNav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  margin: 1rem 0 1.25rem;
+  padding: 0.7rem;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 18px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+}
+
+.appNav button {
+  border: 1px solid #d1d5db;
+  background: #f8fafc;
+  color: #334155;
+  border-radius: 999px;
+  padding: 0.55rem 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.appNav button:hover {
+  border-color: #94a3b8;
+  background: #f1f5f9;
+}
+
+.appNav button.active {
+  background: #0f172a;
+  color: #ffffff;
+  border-color: #0f172a;
+}
+
+.persistentDatasetScope {
+  display: grid;
+  gap: 0.85rem;
+  margin-bottom: 1.25rem;
+}
+
+.userDatasetBanner.compact {
+  margin: 0;
+}
+
+.pageViewport {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.pageIntro {
+  background: linear-gradient(135deg, #0f172a, #1e293b);
+  color: #ffffff;
+  border-radius: 22px;
+  padding: 1.4rem 1.6rem;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.16);
+}
+
+.pageIntro .eyebrow {
+  display: inline-flex;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #bfdbfe;
+  font-weight: 800;
+  margin-bottom: 0.35rem;
+}
+
+.pageIntro h2 {
+  margin: 0;
+  font-size: clamp(1.5rem, 3vw, 2.1rem);
+}
+
+.pageIntro p {
+  margin: 0.55rem 0 0;
+  color: #e2e8f0;
+  max-width: 70rem;
+}
+
+@media (max-width: 720px) {
+  .appNav {
+    align-items: stretch;
+  }
+
+  .appNav button {
+    flex: 1 1 42%;
+  }
+}

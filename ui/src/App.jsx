@@ -39,6 +39,15 @@ const PUBLISHED_PLOTS = [
     path: 'low_level_analysis_dylib_evolution.html',
   },
 ];
+const NAV_ITEMS = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'library', label: 'Library Explorer' },
+  { id: 'compare', label: 'Compare' },
+  { id: 'summary', label: 'iOS Summary' },
+  { id: 'manual', label: 'Manual Datasets' },
+  { id: 'dashboards', label: 'Dashboards' },
+  { id: 'methodology', label: 'Methodology' },
+];
 const CHART_PALETTE = ['#0f172a', '#2563eb', '#16a34a', '#d97706', '#dc2626', '#7c3aed'];
 
 const MANUAL_WEIGHTED_METRICS = new Set([
@@ -1711,6 +1720,33 @@ function MetricReference() {
   );
 }
 
+function AppNavigation({ activePage, onChange }) {
+  return (
+    <nav className="appNav" aria-label="DylibScope sections">
+      {NAV_ITEMS.map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          className={activePage === item.id ? 'active' : ''}
+          onClick={() => onChange(item.id)}
+        >
+          {item.label}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+function PageIntro({ eyebrow, title, children }) {
+  return (
+    <section className="pageIntro">
+      {eyebrow ? <span className="eyebrow">{eyebrow}</span> : null}
+      <h2>{title}</h2>
+      {children ? <p>{children}</p> : null}
+    </section>
+  );
+}
+
 export default function App() {
   const [health, setHealth] = useState(null);
   const [libraries, setLibraries] = useState([]);
@@ -1727,6 +1763,7 @@ export default function App() {
     isAnonymous: false,
     error: '',
   });
+  const [activePage, setActivePage] = useState('overview');
 
   useEffect(() => {
     let cancelled = false;
@@ -1831,6 +1868,8 @@ export default function App() {
     };
   }, [authState.loading, authState.authenticated, selectedDataset]);
 
+  const showUserDatasetBanner = isUserProvidedDataset(selectedDataset, datasets);
+
   return (
     <main>
       <header className="topBar">
@@ -1840,41 +1879,104 @@ export default function App() {
         </div>
         <a href={`${API_BASE_URL}/docs`} target="_blank" rel="noreferrer">API docs</a>
       </header>
+
+      <AppNavigation activePage={activePage} onChange={setActivePage} />
       <ErrorBox error={loadError || authState.error} />
-      <Overview
-        health={health}
-        libraryCount={libraries.length}
-        versionCount={versions.length}
-        selectedDataset={selectedDataset}
-        datasets={datasets}
-        authState={authState}
-      />
-      <DatasetSelector
-        datasets={datasets}
-        selectedDataset={selectedDataset}
-        onChange={setSelectedDataset}
-        authState={authState}
-      />
-      <UserObservationForm
-        authState={authState}
-        datasets={datasets}
-        selectedDataset={selectedDataset}
-        onObservationCreated={(datasetName) => {
-          setSelectedDataset(datasetName);
-          setDatasetRefreshKey((value) => value + 1);
-        }}
-      />
-      {isUserProvidedDataset(selectedDataset, datasets) ? (
-        <div className="userDatasetBanner">
-          User-provided dataset selected. DylibScope will compute scores and security summaries from user-provided values, which may be incomplete or incorrect.
-        </div>
-      ) : null}
-      <PublishedDashboards />
-      <LibraryExplorer libraries={libraries} versions={versions} datasetName={selectedDataset} />
-      <CompareLibraries libraries={libraries} versions={versions} datasetName={selectedDataset} />
-      <CompareVersions libraries={libraries} datasetName={selectedDataset} />
-      <VersionSummary versions={versions} datasetName={selectedDataset} />
-      <MetricReference />
+
+      <div className="persistentDatasetScope">
+        <DatasetSelector
+          datasets={datasets}
+          selectedDataset={selectedDataset}
+          onChange={setSelectedDataset}
+          authState={authState}
+        />
+        {showUserDatasetBanner ? (
+          <div className="userDatasetBanner compact">
+            User-provided or mixed dataset selected. Scores and security summaries are computed from values in this dataset and may be incomplete or incorrect.
+          </div>
+        ) : null}
+      </div>
+
+      <div className="pageViewport">
+        {activePage === 'overview' ? (
+          <>
+            <PageIntro eyebrow="Dataset context" title="Overview">
+              Check the active dataset, API status, and overall scope before using the analysis tools.
+            </PageIntro>
+            <Overview
+              health={health}
+              libraryCount={libraries.length}
+              versionCount={versions.length}
+              selectedDataset={selectedDataset}
+              datasets={datasets}
+              authState={authState}
+            />
+          </>
+        ) : null}
+
+        {activePage === 'library' ? (
+          <>
+            <PageIntro eyebrow="Single-library analysis" title="Library Explorer">
+              Inspect one dynamic library, its selected metrics, timeline, and full static security report.
+            </PageIntro>
+            <LibraryExplorer libraries={libraries} versions={versions} datasetName={selectedDataset} />
+          </>
+        ) : null}
+
+        {activePage === 'compare' ? (
+          <>
+            <PageIntro eyebrow="Comparative analysis" title="Compare">
+              Compare multiple libraries in one iOS scope or one library across multiple iOS versions.
+            </PageIntro>
+            <CompareLibraries libraries={libraries} versions={versions} datasetName={selectedDataset} />
+            <CompareVersions libraries={libraries} datasetName={selectedDataset} />
+          </>
+        ) : null}
+
+        {activePage === 'summary' ? (
+          <>
+            <PageIntro eyebrow="Version-level aggregate" title="iOS Summary">
+              Review average library-score statistics, coverage, band distribution, and top libraries for a selected iOS version.
+            </PageIntro>
+            <VersionSummary versions={versions} datasetName={selectedDataset} />
+          </>
+        ) : null}
+
+        {activePage === 'manual' ? (
+          <>
+            <PageIntro eyebrow="Private dataset workflow" title="Manual Datasets">
+              Create private observations, append to existing private datasets, or clone public-baseline into a private mixed dataset.
+            </PageIntro>
+            <UserObservationForm
+              authState={authState}
+              datasets={datasets}
+              selectedDataset={selectedDataset}
+              onObservationCreated={(datasetName) => {
+                setSelectedDataset(datasetName);
+                setDatasetRefreshKey((value) => value + 1);
+              }}
+            />
+          </>
+        ) : null}
+
+        {activePage === 'dashboards' ? (
+          <>
+            <PageIntro eyebrow="Generated Plotly reports" title="Dashboards">
+              Open the pre-generated high-level and low-level exploratory dashboards.
+            </PageIntro>
+            <PublishedDashboards />
+          </>
+        ) : null}
+
+        {activePage === 'methodology' ? (
+          <>
+            <PageIntro eyebrow="Interpretation guide" title="Methodology">
+              Read metric definitions, score interpretation, and the limitations of static and user-provided data.
+            </PageIntro>
+            <MetricReference />
+          </>
+        ) : null}
+      </div>
     </main>
   );
 }
