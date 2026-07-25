@@ -374,9 +374,17 @@ def list_libraries(
     return [_as_dict(row) for row in rows]
 
 
-def list_ios_versions(conn: Connection, owner_user_id: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Return all firmware/iOS labels visible to the current user."""
+def list_ios_versions(
+    conn: Connection,
+    dataset_name: Optional[str] = None,
+    owner_user_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Return firmware/iOS labels visible in the requested dataset scope."""
     visibility_sql, params = _visibility_condition(owner_user_id)
+    conditions = [visibility_sql]
+    if dataset_name:
+        conditions.append("d.name = :dataset_name")
+        params["dataset_name"] = dataset_name
     rows = conn.execute(
         text(
             f"""
@@ -384,7 +392,7 @@ def list_ios_versions(conn: Connection, owner_user_id: Optional[str] = None) -> 
             FROM ios_versions iv
             JOIN library_observations o ON o.ios_version_id = iv.id
             JOIN datasets d ON d.id = o.dataset_id
-            WHERE {visibility_sql}
+            WHERE {' AND '.join(conditions)}
             ORDER BY iv.ios_release, iv.build_number, iv.device_model, iv.version_label
             """
         ),

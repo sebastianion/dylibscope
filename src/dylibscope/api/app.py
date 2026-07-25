@@ -470,11 +470,17 @@ def create_app(
 
     @app.get("/v1/ios-versions")
     def api_list_ios_versions(
+        dataset_name: Optional[str] = Query(default=None),
         conn: Connection = Depends(get_conn),
         current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
     ) -> Dict[str, Any]:
-        versions = list_ios_versions(conn, owner_user_id=current_user_id(current_user))
-        return {"count": len(versions), "ios_versions": versions}
+        require_dataset_access(conn, dataset_name, current_user)
+        versions = list_ios_versions(
+            conn,
+            dataset_name=dataset_name,
+            owner_user_id=current_user_id(current_user),
+        )
+        return {"count": len(versions), "dataset_name": dataset_name, "ios_versions": versions}
 
     @app.get("/v1/ios-versions/{ios_version}/security-summary", responses={404: {"model": ErrorResponse}})
     def api_get_ios_version_security_summary(

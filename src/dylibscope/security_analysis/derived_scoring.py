@@ -182,6 +182,23 @@ def classify_confidence(available_weight_ratio: float) -> str:
     return "none"
 
 
+def classify_summary_coverage(observation_count: int) -> Dict[str, Optional[str]]:
+    """Classify how much evidence supports an iOS-version aggregate summary."""
+    if observation_count <= 0:
+        return {"level": "no_observations", "warning": "No library observations support this summary."}
+    if observation_count == 1:
+        return {
+            "level": "single_library_only",
+            "warning": "This summary is based on one library observation and should not be compared directly with broader iOS summaries.",
+        }
+    if observation_count < 10:
+        return {
+            "level": "limited_dataset_coverage",
+            "warning": "This summary is based on a limited number of library observations. Treat cross-version comparisons cautiously.",
+        }
+    return {"level": "broader_dataset_coverage", "warning": None}
+
+
 def classify_trend(score_delta: Optional[float]) -> str:
     """Classify first-to-last score movement."""
     if score_delta is None:
@@ -410,6 +427,8 @@ def build_version_security_summary(
         )
 
     numeric_scores = [item["score"] for item in scored if is_number(item["score"])]
+    observed_library_count = len({str(item["library"]) for item in scored if item.get("library")})
+    coverage = classify_summary_coverage(len(observations))
     band_counts: Dict[str, int] = {}
     confidence_counts: Dict[str, int] = {}
     for item in scored:
@@ -422,9 +441,19 @@ def build_version_security_summary(
         "summary_type": "ios_version_security_summary",
         "ios_version_filter": ios_version,
         "observation_count": len(observations),
+        "observed_library_count": observed_library_count,
         "scoring_basis": "existing_profile_weighted_log_static_metric_score",
+        "score_aggregation_method": "arithmetic_mean_of_library_observation_scores",
+        "coverage_level": coverage["level"],
+        "coverage_warning": coverage["warning"],
+        "coverage": {
+            "observation_count": len(observations),
+            "observed_library_count": observed_library_count,
+            **coverage,
+        },
         "interpretation_note": INTERPRETATION_NOTE,
         "score_statistics": {
+            "aggregation_method": "arithmetic_mean_of_library_observation_scores",
             "average_score": None if not numeric_scores else round(sum(numeric_scores) / len(numeric_scores), 3),
             "median_score": None if not numeric_scores else round(float(median(numeric_scores)), 3),
             "minimum_score": None if not numeric_scores else min(numeric_scores),

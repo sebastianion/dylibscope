@@ -1466,15 +1466,26 @@ function VersionSummary({ versions, datasetName }) {
       {data ? (
         <div>
           <div className="reportGrid">
-            <div className="scoreBox"><span>Observations</span><strong>{data.observation_count}</strong></div>
-            <div className="scoreBox"><span>Average score</span><strong>{formatScalarValue(data.score_statistics?.average_score)}</strong></div>
-            <div className="scoreBox"><span>Median score</span><strong>{formatScalarValue(data.score_statistics?.median_score)}</strong></div>
+            <div className="scoreBox"><span>Observed libraries</span><strong>{data.observed_library_count ?? data.observation_count}</strong></div>
+            <div className="scoreBox"><span>Average library score</span><strong>{formatScalarValue(data.score_statistics?.average_score)}</strong></div>
+            <div className="scoreBox"><span>Median library score</span><strong>{formatScalarValue(data.score_statistics?.median_score)}</strong></div>
+          </div>
+          <p className="sectionIntro">
+            Aggregation: {data.score_aggregation_method || data.score_statistics?.aggregation_method || 'arithmetic_mean_of_library_observation_scores'}.
+            The iOS-version summary score is an aggregate of observed library scores, not a direct score for the whole operating system image.
+          </p>
+          {data.coverage_warning ? <p className="warningNote">{data.coverage_warning}</p> : null}
+          <div className="contextStrip compact">
+            <span>Observation count: <strong>{data.observation_count}</strong></span>
+            <span>Coverage: <strong>{data.coverage_level || data.coverage?.level || 'unknown'}</strong></span>
+            <span>Minimum score: <strong>{formatScalarValue(data.score_statistics?.minimum_score)}</strong></span>
+            <span>Maximum score: <strong>{formatScalarValue(data.score_statistics?.maximum_score)}</strong></span>
           </div>
           <div className="chartGrid">
             <BandCountsChart rows={buildBandChartRows(data)} />
             <TopScoresChart rows={buildTopScoreRows(data)} />
           </div>
-          <h3>Band counts</h3>
+          <h3>Library-score band counts</h3>
           <div className="tagRow">
             {Object.entries(data.band_counts || {}).map(([key, value]) => <span className="tag" key={key}>{key}: {value}</span>)}
           </div>
@@ -1684,7 +1695,7 @@ export default function App() {
         const [healthResponse, librariesResponse, versionsResponse] = await Promise.all([
           apiGet('/health'),
           apiGet('/v1/libraries', { dataset_name: selectedDataset }),
-          apiGet('/v1/ios-versions'),
+          apiGet('/v1/ios-versions', { dataset_name: selectedDataset }),
         ]);
         if (cancelled) return;
         setHealth(healthResponse);
