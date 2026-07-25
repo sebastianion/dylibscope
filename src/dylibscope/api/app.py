@@ -23,6 +23,8 @@ from dylibscope.security_analysis.derived_scoring import (
     score_observation,
 )
 from dylibscope.storage.repository import (
+    DatasetConflictError,
+    ObservationConflictError,
     create_user_manual_observation,
     dataset_accessible,
     get_library_metrics,
@@ -35,6 +37,7 @@ from dylibscope.storage.schema import connect
 
 MetricLevel = Literal["high", "low", "all"]
 UserObservationTargetMode = Literal["new_private_dataset", "append_private_dataset", "clone_public_baseline"]
+UserObservationConflictMode = Literal["reject", "replace"]
 
 PUBLIC_BASELINE_DATASET_NAME = "public-baseline"
 USER_PROVIDED_WARNING = (
@@ -60,6 +63,10 @@ class UserObservationRequest(BaseModel):
         ),
     )
     source_dataset_name: str = Field(default=PUBLIC_BASELINE_DATASET_NAME, description="Public source dataset used for clone_public_baseline.")
+    conflict_mode: UserObservationConflictMode = Field(
+        default="reject",
+        description="Reject duplicate library/iOS observations by default, or explicitly replace an existing observation.",
+    )
 
     @field_validator("dataset_name")
     @classmethod
@@ -460,13 +467,20 @@ def create_app(
                 original_path=request.original_path,
                 target_mode=request.target_mode,
                 source_dataset_name=request.source_dataset_name,
+                conflict_mode=request.conflict_mode,
             )
+        except ObservationConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except DatasetConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         return {
-            "operation": "upserted_user_observation",
+            "operation": "saved_user_observation",
             "target_mode": request.target_mode,
+            "conflict_mode": request.conflict_mode,
+            "manual_write_operation": observation.get("manual_write_operation"),
             "source_dataset_name": request.source_dataset_name if request.target_mode == "clone_public_baseline" else None,
             "dataset_name": request.dataset_name,
             "dataset_visibility": observation.get("dataset_visibility", "private"),

@@ -5,6 +5,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from sqlalchemy import bindparam, select, text
 from sqlalchemy.engine import Connection, RowMapping
+from sqlalchemy.exc import IntegrityError
 
 from dylibscope.storage.normalize import canonicalize_library_name, json_dumps_stable, parse_ios_version_label
 from dylibscope.storage.schema import (
@@ -25,6 +26,14 @@ PUBLIC_BASELINE_CLONE_SOURCE_TYPE = "public_baseline_clone_with_user_manual"
 MIXED_VERIFIED_MANUAL_TRUST_LEVEL = "mixed_verified_and_user_provided"
 PRIVATE_DATASET_VISIBILITY = "private"
 PUBLIC_BASELINE_DATASET_NAME = "public-baseline"
+
+
+class DatasetConflictError(ValueError):
+    """Raised when a private dataset name conflicts within the current owner scope."""
+
+
+class ObservationConflictError(ValueError):
+    """Raised when a manual observation would overwrite an existing library/iOS entry."""
 
 
 def _scalar_id(row: Any) -> int:
@@ -96,19 +105,48 @@ def _metric_definition_map(conn: Connection) -> Dict[str, Dict[str, str]]:
     return {str(row["name"]): {"level": str(row["level"]), "value_type": str(row["value_type"])} for row in rows}
 
 
-def _dataset_row_by_name(conn: Connection, dataset_name: str) -> Optional[RowMapping]:
-    row = conn.execute(
-        select(
-            datasets.c.id,
-            datasets.c.name,
-            datasets.c.owner_user_id,
-            datasets.c.visibility,
-            datasets.c.source,
-            datasets.c.source_type,
-            datasets.c.trust_level,
-        ).where(datasets.c.name == dataset_name)
-    ).mappings().first()
-    return row
+def _dataset_select_columns() -> Any:
+    return select(
+        datasets.c.id,
+        datasets.c.name,
+        datasets.c.owner_user_id,
+        datasets.c.visibility,
+        datasets.c.source,
+        datasets.c.source_type,
+        datasets.c.trust_level,
+    )
+
+
+def _public_dataset_row_by_name(conn: Connection, dataset_name: str) -> Optional[RowMapping]:
+    return (
+        conn.execute(
+            _dataset_select_columns().where(
+                datasets.c.name == dataset_name,
+                datasets.c.visibility == PUBLIC_DATASET_VISIBILITY,
+            )
+        )
+        .mappings()
+        .first()
+    )
+
+
+def _private_dataset_row_by_owner_and_name(
+    conn: Connection,
+    *,
+    dataset_name: str,
+    owner_user_id: str,
+) -> Optional[RowMapping]:
+    return (
+        conn.execute(
+            _dataset_select_columns().where(
+                datasets.c.name == dataset_name,
+                datasets.c.visibility == PRIVATE_DATASET_VISIBILITY,
+                datasets.c.owner_user_id == owner_user_id,
+            )
+        )
+        .mappings()
+        .first()
+    )
 
 
 def _create_private_dataset(
@@ -120,19 +158,33 @@ def _create_private_dataset(
     source_type: str,
     trust_level: str,
 ) -> int:
-    return _insert_and_fetch_id(
-        conn,
-        datasets,
-        {
-            "name": dataset_name,
-            "source": source,
-            "visibility": PRIVATE_DATASET_VISIBILITY,
-            "owner_user_id": owner_user_id,
-            "source_type": source_type,
-            "trust_level": trust_level,
-        },
-        datasets.c.name == dataset_name,
-    )
+    try:
+        return _insert_and_fetch_id(
+            conn,
+            datasets,
+            {
+                "name": dataset_name,
+                "source": source,
+                "visibility": PRIVATE_DATASET_VISIBILITY,
+                "owner_user_id": owner_user_id,
+                "source_type": source_type,
+                "trust_level": trust_level,
+            },
+            (
+                (datasets.c.name == dataset_name)
+                & (datasets.c.owner_user_id == owner_user_id)
+                & (datasets.c.visibility == PRIVATE_DATASET_VISIBILITY)
+            ),
+        )
+    except IntegrityError as exc:
+        raise DatasetConflictError(
+            "private dataset could not be created because the name conflicts in the current scope; "
+            "run the schema migration if this appears to be a cross-user collision"
+        ) from exc
+
+
+def _public_name_is_reserved(conn: Connection, dataset_name: str) -> bool:
+    return _public_dataset_row_by_name(conn, dataset_name) is not None
 
 
 def ensure_user_manual_dataset(conn: Connection, dataset_name: str, owner_user_id: str) -> int:
@@ -142,11 +194,15 @@ def ensure_user_manual_dataset(conn: Connection, dataset_name: str, owner_user_i
     cloned baseline datasets, whose metadata should remain mixed rather than being
     downgraded to plain user_manual on later appends.
     """
-    row = _dataset_row_by_name(conn, dataset_name)
+    row = _private_dataset_row_by_owner_and_name(
+        conn,
+        dataset_name=dataset_name,
+        owner_user_id=owner_user_id,
+    )
     if row:
-        if row["owner_user_id"] != owner_user_id or row["visibility"] != PRIVATE_DATASET_VISIBILITY:
-            raise ValueError("dataset name is already used by another visible dataset")
         return int(row["id"])
+    if _public_name_is_reserved(conn, dataset_name):
+        raise DatasetConflictError("dataset name is reserved by a public dataset")
 
     return _create_private_dataset(
         conn,
@@ -160,8 +216,16 @@ def ensure_user_manual_dataset(conn: Connection, dataset_name: str, owner_user_i
 
 def create_new_user_manual_dataset(conn: Connection, dataset_name: str, owner_user_id: str) -> int:
     """Create a new private manual dataset and reject accidental appends."""
-    if _dataset_row_by_name(conn, dataset_name):
-        raise ValueError("dataset already exists; choose append-to-existing or a different dataset name")
+    if _private_dataset_row_by_owner_and_name(
+        conn,
+        dataset_name=dataset_name,
+        owner_user_id=owner_user_id,
+    ):
+        raise DatasetConflictError(
+            "a private dataset with this name already exists for your account; use append mode or choose another name"
+        )
+    if _public_name_is_reserved(conn, dataset_name):
+        raise DatasetConflictError("dataset name is reserved by a public dataset")
     return _create_private_dataset(
         conn,
         dataset_name=dataset_name,
@@ -174,11 +238,13 @@ def create_new_user_manual_dataset(conn: Connection, dataset_name: str, owner_us
 
 def ensure_existing_private_user_dataset(conn: Connection, dataset_name: str, owner_user_id: str) -> int:
     """Return an existing private dataset owned by the current user."""
-    row = _dataset_row_by_name(conn, dataset_name)
+    row = _private_dataset_row_by_owner_and_name(
+        conn,
+        dataset_name=dataset_name,
+        owner_user_id=owner_user_id,
+    )
     if not row:
-        raise ValueError("private target dataset was not found")
-    if row["visibility"] != PRIVATE_DATASET_VISIBILITY or row["owner_user_id"] != owner_user_id:
-        raise ValueError("target dataset is not a private dataset owned by the current user")
+        raise ValueError("private target dataset was not found for the current user")
     return int(row["id"])
 
 
@@ -190,11 +256,17 @@ def clone_public_dataset_for_user(
     owner_user_id: str,
 ) -> int:
     """Physically clone a public dataset into a private user-owned dataset."""
-    if _dataset_row_by_name(conn, target_dataset_name):
-        raise ValueError("clone target dataset already exists; append to it instead of cloning again")
+    if _private_dataset_row_by_owner_and_name(
+        conn,
+        dataset_name=target_dataset_name,
+        owner_user_id=owner_user_id,
+    ):
+        raise DatasetConflictError("clone target dataset already exists for your account; append to it instead of cloning again")
+    if _public_name_is_reserved(conn, target_dataset_name):
+        raise DatasetConflictError("clone target name is reserved by a public dataset")
 
-    source_row = _dataset_row_by_name(conn, source_dataset_name)
-    if not source_row or source_row["visibility"] != PUBLIC_DATASET_VISIBILITY:
+    source_row = _public_dataset_row_by_name(conn, source_dataset_name)
+    if not source_row:
         raise ValueError("source dataset must be an existing public dataset")
 
     source_dataset_id = int(source_row["id"])
@@ -330,7 +402,8 @@ def _get_or_create_manual_observation(
     original_path: Optional[str],
     has_hla_metrics: bool,
     has_lla_metrics: bool,
-) -> int:
+    conflict_mode: str,
+) -> Tuple[int, str]:
     row = conn.execute(
         select(
             library_observations.c.id,
@@ -350,17 +423,26 @@ def _get_or_create_manual_observation(
         update_values["original_path"] = original_path
 
     if row:
+        if conflict_mode == "reject":
+            raise ObservationConflictError(
+                "observation already exists for this dataset, library, and iOS version; "
+                "use conflict_mode=replace to replace it explicitly"
+            )
+        if conflict_mode != "replace":
+            raise ValueError("conflict_mode must be either 'reject' or 'replace'")
         observation_id = _scalar_id(row)
-        update_values["hla_source_seen"] = max(int(row.hla_source_seen), update_values["hla_source_seen"])
-        update_values["lla_source_seen"] = max(int(row.lla_source_seen), update_values["lla_source_seen"])
         conn.execute(
             library_observations.update()
             .where(library_observations.c.id == observation_id)
             .values(**update_values)
         )
-        return observation_id
+        conn.execute(metric_values.delete().where(metric_values.c.observation_id == observation_id))
+        return observation_id, "replaced"
 
-    return _insert_and_fetch_id(
+    if conflict_mode not in {"reject", "replace"}:
+        raise ValueError("conflict_mode must be either 'reject' or 'replace'")
+
+    observation_id = _insert_and_fetch_id(
         conn,
         library_observations,
         {
@@ -377,6 +459,7 @@ def _get_or_create_manual_observation(
             & (library_observations.c.ios_version_id == ios_version_id)
         ),
     )
+    return observation_id, "created"
 
 
 def _storage_values_for_metric(metric_name: str, value_type: str, value: Any) -> Dict[str, Any]:
@@ -406,8 +489,9 @@ def create_user_manual_observation(
     original_path: Optional[str] = None,
     target_mode: str,
     source_dataset_name: str = PUBLIC_BASELINE_DATASET_NAME,
+    conflict_mode: str = "reject",
 ) -> Dict[str, Any]:
-    """Create or update one private manual observation and return the resolved observation."""
+    """Create one private manual observation or explicitly replace an existing one."""
     definitions = _metric_definition_map(conn)
     if not definitions:
         raise ValueError("metric definitions are not initialized")
@@ -427,7 +511,7 @@ def create_user_manual_observation(
     ios_version_id = _get_or_create_ios_version(conn, ios_version)
     has_hla_metrics = any(definitions[name]["level"] == "high" for name in metrics)
     has_lla_metrics = any(definitions[name]["level"] == "low" for name in metrics)
-    observation_id = _get_or_create_manual_observation(
+    observation_id, write_operation = _get_or_create_manual_observation(
         conn,
         dataset_id=dataset_id,
         library_id=library_id,
@@ -435,6 +519,7 @@ def create_user_manual_observation(
         original_path=original_path,
         has_hla_metrics=has_hla_metrics,
         has_lla_metrics=has_lla_metrics,
+        conflict_mode=conflict_mode,
     )
 
     for metric_name, value in metrics.items():
@@ -450,7 +535,11 @@ def create_user_manual_observation(
         ios_version=ios_version,
         owner_user_id=owner_user_id,
     )
-    return observations[0] if observations else {}
+    if not observations:
+        return {}
+    observation = observations[0]
+    observation["manual_write_operation"] = write_operation
+    return observation
 
 
 def _as_dict(row: RowMapping) -> Dict[str, Any]:
@@ -500,9 +589,16 @@ def list_datasets(conn: Connection, owner_user_id: Optional[str] = None) -> List
     return [_as_dict(row) for row in rows]
 
 
-def dataset_exists(conn: Connection, dataset_name: str) -> bool:
-    row = conn.execute(select(datasets.c.id).where(datasets.c.name == dataset_name)).first()
-    return row is not None
+def dataset_exists(conn: Connection, dataset_name: str, owner_user_id: Optional[str] = None) -> bool:
+    if _public_dataset_row_by_name(conn, dataset_name):
+        return True
+    if owner_user_id and _private_dataset_row_by_owner_and_name(
+        conn,
+        dataset_name=dataset_name,
+        owner_user_id=owner_user_id,
+    ):
+        return True
+    return False
 
 
 def dataset_accessible(conn: Connection, dataset_name: str, owner_user_id: Optional[str] = None) -> bool:

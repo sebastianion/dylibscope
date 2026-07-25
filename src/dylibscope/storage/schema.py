@@ -19,11 +19,12 @@ from sqlalchemy import (
     func,
     inspect,
     select,
+    text,
 )
 from sqlalchemy.engine import Connection, Engine, make_url
 from sqlalchemy.exc import IntegrityError
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 DEFAULT_SQLITE_PATH = Path("data/dylibscope.sqlite")
 
 metadata = MetaData()
@@ -39,7 +40,7 @@ datasets = Table(
     "datasets",
     metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("name", String, nullable=False, unique=True),
+    Column("name", String, nullable=False),
     Column("source", String, nullable=False),
     Column("visibility", String, nullable=False, server_default="public"),
     Column("owner_user_id", String),
@@ -181,14 +182,12 @@ _ENGINE_CACHE_LOCK = RLock()
 
 def _new_db_engine(resolved_url: str) -> Engine:
     url = make_url(resolved_url)
-
     if url.drivername.startswith("sqlite"):
         return create_engine(
             resolved_url,
             future=True,
             connect_args={"check_same_thread": False},
         )
-
     return create_engine(
         resolved_url,
         future=True,
@@ -232,7 +231,6 @@ def connect(database: Optional[Union[str, Path]] = None) -> Connection:
     else:
         text_value = str(database)
         database_url = text_value if is_database_url(text_value) else sqlite_url_from_path(text_value)
-
     database_url = normalize_database_url(database_url)
     engine = create_db_engine(database_url)
     conn = engine.connect()
@@ -242,10 +240,10 @@ def connect(database: Optional[Union[str, Path]] = None) -> Connection:
 
 
 def initialize_database(conn: Connection) -> None:
-    """Create schema tables, migrate additive columns, and insert metric definitions."""
+    """Create schema tables, migrate ownership/provenance fields, and insert metric definitions."""
     metadata.create_all(conn)
     _ensure_dataset_provenance_columns(conn)
-
+    _ensure_dataset_name_scope_constraints(conn)
     _upsert_schema_metadata(conn, "schema_version", str(SCHEMA_VERSION))
     for name, level, value_type, description in METRIC_DEFINITIONS:
         _upsert_metric_definition(conn, name, level, value_type, description)
@@ -274,7 +272,6 @@ def _ensure_dataset_provenance_columns(conn: Connection) -> None:
     _add_column_if_missing(conn, "datasets", "owner_user_id", "VARCHAR")
     _add_column_if_missing(conn, "datasets", "source_type", "VARCHAR")
     _add_column_if_missing(conn, "datasets", "trust_level", "VARCHAR")
-
     conn.execute(
         datasets.update()
         .where(datasets.c.source_type.is_(None))
@@ -284,6 +281,61 @@ def _ensure_dataset_provenance_columns(conn: Connection) -> None:
         datasets.update()
         .where(datasets.c.trust_level.is_(None))
         .values(trust_level="verified_pipeline_output")
+    )
+
+
+def _ensure_dataset_name_scope_constraints(conn: Connection) -> None:
+    """Replace global dataset-name uniqueness with scoped public/private uniqueness.
+
+    Public dataset names remain globally unique. Private dataset names are unique only
+    within the current owner, allowing different users to reuse the same display name.
+    """
+    if conn.dialect.name == "postgresql":
+        _drop_postgres_global_dataset_name_unique_constraint(conn)
+
+    if conn.dialect.name in {"postgresql", "sqlite"}:
+        conn.execute(
+            text(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_datasets_public_name
+                ON datasets (name)
+                WHERE visibility = 'public'
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_datasets_private_owner_name
+                ON datasets (owner_user_id, name)
+                WHERE visibility = 'private' AND owner_user_id IS NOT NULL
+                """
+            )
+        )
+
+
+def _drop_postgres_global_dataset_name_unique_constraint(conn: Connection) -> None:
+    """Drop legacy PostgreSQL UNIQUE(name) constraints created by older schemas."""
+    conn.execute(
+        text(
+            """
+            DO $$
+            DECLARE constraint_record record;
+            BEGIN
+              FOR constraint_record IN
+                SELECT con.conname
+                FROM pg_constraint con
+                JOIN pg_class rel ON rel.oid = con.conrelid
+                JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+                WHERE rel.relname = 'datasets'
+                  AND con.contype = 'u'
+                  AND pg_get_constraintdef(con.oid) = 'UNIQUE (name)'
+              LOOP
+                EXECUTE format('ALTER TABLE %I DROP CONSTRAINT %I', 'datasets', constraint_record.conname);
+              END LOOP;
+            END $$;
+            """
+        )
     )
 
 

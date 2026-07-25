@@ -808,6 +808,7 @@ function buildManualObservationPayload(form, metricValues, datasets) {
       target_mode: form.targetMode,
       dataset_name: targetDatasetName,
       source_dataset_name: form.targetMode === 'clone_public_baseline' ? DEFAULT_DATASET : undefined,
+      conflict_mode: form.conflictMode,
       library: form.library.trim(),
       ios_version: form.iosVersion.trim(),
       original_path: form.originalPath.trim() || undefined,
@@ -823,6 +824,7 @@ function UserObservationForm({ authState, datasets, selectedDataset, onObservati
     datasetName: 'my-manual-dataset',
     existingDatasetName: '',
     cloneDatasetName: 'public-baseline-with-manual-additions',
+    conflictMode: 'reject',
     library: 'libManualTest.dylib',
     iosVersion: 'iPhone15,2_17.0_21A329',
     originalPath: '',
@@ -935,6 +937,20 @@ function UserObservationForm({ authState, datasets, selectedDataset, onObservati
         ) : null}
       </div>
 
+      <div className="manualTargetBox">
+        <label>
+          Duplicate library/iOS behavior
+          <select value={form.conflictMode} onChange={(event) => updateForm('conflictMode', event.target.value)}>
+            <option value="reject">Reject if this library/iOS entry already exists</option>
+            <option value="replace">Replace existing observation explicitly</option>
+          </select>
+        </label>
+        <p className="schemaHint">
+          Default reject mode prevents silent overwrites. Use replace only when you intentionally want to replace the metrics for the same dataset, library, and iOS version.
+        </p>
+      </div>
+
+
       <div className="manualFormGrid">
         <label>
           Library basename
@@ -1000,7 +1016,7 @@ function UserObservationForm({ authState, datasets, selectedDataset, onObservati
           <p>
             Dataset <code>{result.dataset_name}</code> is private and now available in the dataset selector. Source: <code>{result.dataset_source_type}</code>. Trust: <code>{result.dataset_trust_level}</code>.
           </p>
-          <p className="muted">Metric count: {result.metric_count}. Library: <code>{result.library}</code>. iOS version: <code>{result.ios_version}</code>.</p>
+          <p className="muted">Action: <code>{result.manual_write_operation || 'saved'}</code>. Conflict mode: <code>{result.conflict_mode}</code>. Metric count: {result.metric_count}. Library: <code>{result.library}</code>. iOS version: <code>{result.ios_version}</code>.</p>
         </div>
       ) : null}
     </Card>
