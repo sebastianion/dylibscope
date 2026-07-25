@@ -35,6 +35,7 @@ def test_create_user_observation_requires_authentication(tmp_path: Path) -> None
     response = client.post(
         "/v1/user-observations",
         json={
+            "target_mode": "new_private_dataset",
             "dataset_name": "alice-manual",
             "library": "libManual.dylib",
             "ios_version": "iPhone15,2_17.0_21A329",
@@ -55,6 +56,7 @@ def test_create_user_observation_creates_private_dataset_and_metrics(tmp_path: P
     response = client.post(
         "/v1/user-observations",
         json={
+            "target_mode": "new_private_dataset",
             "dataset_name": "alice-manual",
             "library": "libManual.dylib",
             "ios_version": "iPhone15,2_17.0_21A329",
@@ -72,6 +74,8 @@ def test_create_user_observation_creates_private_dataset_and_metrics(tmp_path: P
     assert response.status_code == 201
     payload = response.json()
     assert payload["operation"] == "upserted_user_observation"
+    assert payload["target_mode"] == "new_private_dataset"
+    assert payload["source_dataset_name"] is None
     assert payload["dataset_visibility"] == "private"
     assert payload["dataset_source_type"] == "user_manual"
     assert payload["dataset_trust_level"] == "user_provided_unverified"
@@ -97,6 +101,53 @@ def test_create_user_observation_creates_private_dataset_and_metrics(tmp_path: P
     assert metrics["observations"][0]["metrics"]["cfg_edge_count"]["value"] == 20
 
 
+def test_user_observation_appends_to_existing_private_dataset(tmp_path: Path) -> None:
+    db_path = build_empty_test_db(tmp_path)
+    app = create_app(db_path=db_path)
+    app.dependency_overrides[require_current_user] = fake_user
+    app.dependency_overrides[get_optional_current_user] = fake_optional_user
+    client = TestClient(app)
+
+    create_response = client.post(
+        "/v1/user-observations",
+        json={
+            "target_mode": "new_private_dataset",
+            "dataset_name": "alice-manual",
+            "library": "libManualOne.dylib",
+            "ios_version": "iPhone15,2_17.0_21A329",
+            "metrics": {"num_symbols": 10},
+        },
+    )
+    assert create_response.status_code == 201
+
+    append_response = client.post(
+        "/v1/user-observations",
+        json={
+            "target_mode": "append_private_dataset",
+            "dataset_name": "alice-manual",
+            "library": "libManualTwo.dylib",
+            "ios_version": "iPhone15,2_17.0_21A329",
+            "metrics": {"num_symbols": 12, "cfg_edge_count": 24},
+        },
+    )
+
+    assert append_response.status_code == 201
+    payload = append_response.json()
+    assert payload["target_mode"] == "append_private_dataset"
+    assert payload["dataset_name"] == "alice-manual"
+    assert payload["dataset_source_type"] == "user_manual"
+
+    datasets = client.get("/v1/datasets").json()["datasets"]
+    assert [item["name"] for item in datasets] == ["alice-manual"]
+
+    libraries = client.get("/v1/libraries", params={"dataset_name": "alice-manual"}).json()
+    assert libraries["count"] == 2
+    assert {item["display_name"] for item in libraries["libraries"]} == {
+        "libManualOne.dylib",
+        "libManualTwo.dylib",
+    }
+
+
 def test_user_observation_rejects_public_baseline_and_context_only_metrics(tmp_path: Path) -> None:
     db_path = build_empty_test_db(tmp_path)
     app = create_app(db_path=db_path)
@@ -106,6 +157,7 @@ def test_user_observation_rejects_public_baseline_and_context_only_metrics(tmp_p
     public_response = client.post(
         "/v1/user-observations",
         json={
+            "target_mode": "new_private_dataset",
             "dataset_name": "public-baseline",
             "library": "libManual.dylib",
             "ios_version": "iPhone15,2_17.0_21A329",
@@ -117,6 +169,7 @@ def test_user_observation_rejects_public_baseline_and_context_only_metrics(tmp_p
     context_only_response = client.post(
         "/v1/user-observations",
         json={
+            "target_mode": "new_private_dataset",
             "dataset_name": "alice-manual",
             "library": "libManual.dylib",
             "ios_version": "iPhone15,2_17.0_21A329",
@@ -124,3 +177,22 @@ def test_user_observation_rejects_public_baseline_and_context_only_metrics(tmp_p
         },
     )
     assert context_only_response.status_code == 422
+
+
+def test_user_observation_requires_target_mode(tmp_path: Path) -> None:
+    db_path = build_empty_test_db(tmp_path)
+    app = create_app(db_path=db_path)
+    app.dependency_overrides[require_current_user] = fake_user
+    client = TestClient(app)
+
+    response = client.post(
+        "/v1/user-observations",
+        json={
+            "dataset_name": "alice-manual",
+            "library": "libManual.dylib",
+            "ios_version": "iPhone15,2_17.0_21A329",
+            "metrics": {"num_symbols": 10},
+        },
+    )
+
+    assert response.status_code == 422

@@ -239,17 +239,35 @@ function datasetDisplayName(dataset) {
   return dataset?.name || DEFAULT_DATASET;
 }
 
+function datasetTrustDisplay(dataset) {
+  const trust = dataset?.trust_level || dataset?.trust || '';
+  if (trust === 'verified_pipeline_output') return 'Verified baseline';
+  if (trust === 'user_provided_unverified') return 'User-provided';
+  if (trust === 'mixed_verified_and_user_provided') return 'Mixed verified + user-provided';
+  return trust || 'Unknown trust';
+}
+
 function datasetLabel(dataset) {
   const name = datasetDisplayName(dataset);
-  const visibility = dataset?.visibility || 'public';
-  const trust = dataset?.trust_level || dataset?.trust || '';
-  if (name === DEFAULT_DATASET) return `${name} - public baseline`;
-  return `${name} - ${visibility}${trust ? `, ${trust}` : ''}`;
+  if (name === DEFAULT_DATASET) return `${name} - Public baseline`;
+  const visibility = dataset?.visibility === 'private' ? 'Private' : dataset?.visibility || 'Public';
+  return `${name} - ${visibility}, ${datasetTrustDisplay(dataset)}`;
 }
 
 function isUserProvidedDataset(datasetName, datasets) {
   const dataset = datasets.find((item) => item.name === datasetName);
-  return dataset?.source_type === 'user_manual' || dataset?.trust_level === 'user_provided_unverified';
+  return (
+    dataset?.source_type === 'user_manual' ||
+    dataset?.source_type === 'public_baseline_clone_with_user_manual' ||
+    dataset?.trust_level === 'user_provided_unverified' ||
+    dataset?.trust_level === 'mixed_verified_and_user_provided'
+  );
+}
+
+function privateDatasetOptions(datasets) {
+  return datasets
+    .filter((dataset) => dataset.visibility === 'private')
+    .sort((a, b) => datasetDisplayName(a).localeCompare(datasetDisplayName(b), undefined, { numeric: true }));
 }
 
 function optionValue(item) {
@@ -704,9 +722,10 @@ function parseManualList(value) {
     .filter(Boolean);
 }
 
-function buildManualObservationPayload(form, metricValues) {
+function buildManualObservationPayload(form, metricValues, datasets) {
   const metrics = {};
   const errors = [];
+  const datasetNames = new Set(datasets.map((dataset) => dataset.name));
 
   Object.entries(metricValues).forEach(([name, rawValue]) => {
     const value = typeof rawValue === 'string' ? rawValue.trim() : rawValue;
@@ -736,12 +755,37 @@ function buildManualObservationPayload(form, metricValues) {
     metrics[name] = String(value);
   });
 
-  if (!form.datasetName.trim()) {
-    errors.push('Dataset name is required.');
+  let targetDatasetName = '';
+  if (form.targetMode === 'new_private_dataset') {
+    targetDatasetName = form.datasetName.trim();
+    if (!targetDatasetName) {
+      errors.push('New private dataset name is required.');
+    } else if (targetDatasetName === DEFAULT_DATASET) {
+      errors.push('public-baseline cannot be modified directly. Use clone mode instead.');
+    } else if (datasetNames.has(targetDatasetName)) {
+      errors.push('A dataset with this name already exists. Choose append mode or use a new name.');
+    }
+  } else if (form.targetMode === 'append_private_dataset') {
+    targetDatasetName = form.existingDatasetName.trim();
+    const selected = datasets.find((dataset) => dataset.name === targetDatasetName);
+    if (!targetDatasetName) {
+      errors.push('Choose an existing private dataset to append to.');
+    } else if (!selected || selected.visibility !== 'private') {
+      errors.push('Append mode requires an existing private dataset.');
+    }
+  } else if (form.targetMode === 'clone_public_baseline') {
+    targetDatasetName = form.cloneDatasetName.trim();
+    if (!targetDatasetName) {
+      errors.push('Private clone dataset name is required.');
+    } else if (targetDatasetName === DEFAULT_DATASET) {
+      errors.push('The clone must use a new private dataset name, not public-baseline.');
+    } else if (datasetNames.has(targetDatasetName)) {
+      errors.push('A dataset with this name already exists. Append to it instead of cloning again.');
+    }
+  } else {
+    errors.push('Choose a valid dataset target mode.');
   }
-  if (form.datasetName.trim() === DEFAULT_DATASET) {
-    errors.push('public-baseline is read-only. Choose a private dataset name.');
-  }
+
   if (!form.library.trim()) {
     errors.push('Library name is required.');
   }
@@ -761,7 +805,9 @@ function buildManualObservationPayload(form, metricValues) {
   return {
     errors,
     payload: {
-      dataset_name: form.datasetName.trim(),
+      target_mode: form.targetMode,
+      dataset_name: targetDatasetName,
+      source_dataset_name: form.targetMode === 'clone_public_baseline' ? DEFAULT_DATASET : undefined,
       library: form.library.trim(),
       ios_version: form.iosVersion.trim(),
       original_path: form.originalPath.trim() || undefined,
@@ -770,9 +816,13 @@ function buildManualObservationPayload(form, metricValues) {
   };
 }
 
-function UserObservationForm({ authState, onObservationCreated }) {
+function UserObservationForm({ authState, datasets, selectedDataset, onObservationCreated }) {
+  const privateDatasets = useMemo(() => privateDatasetOptions(datasets), [datasets]);
   const [form, setForm] = useState(() => ({
-    datasetName: `manual-smoke-${Date.now()}`,
+    targetMode: 'new_private_dataset',
+    datasetName: 'my-manual-dataset',
+    existingDatasetName: '',
+    cloneDatasetName: 'public-baseline-with-manual-additions',
     library: 'libManualTest.dylib',
     iosVersion: 'iPhone15,2_17.0_21A329',
     originalPath: '',
@@ -792,6 +842,17 @@ function UserObservationForm({ authState, onObservationCreated }) {
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
 
+  useEffect(() => {
+    if (!privateDatasets.length) return;
+    setForm((current) => {
+      if (current.existingDatasetName && privateDatasets.some((dataset) => dataset.name === current.existingDatasetName)) {
+        return current;
+      }
+      const preferred = privateDatasets.find((dataset) => dataset.name === selectedDataset) || privateDatasets[0];
+      return { ...current, existingDatasetName: preferred.name };
+    });
+  }, [privateDatasets, selectedDataset]);
+
   function updateForm(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
   }
@@ -803,7 +864,7 @@ function UserObservationForm({ authState, onObservationCreated }) {
   async function submitObservation() {
     setError('');
     setResult(null);
-    const { errors, payload } = buildManualObservationPayload(form, metricValues);
+    const { errors, payload } = buildManualObservationPayload(form, metricValues, datasets);
     if (errors.length) {
       setError(errors.join(' '));
       return;
@@ -833,13 +894,48 @@ function UserObservationForm({ authState, onObservationCreated }) {
         User-provided observations are not independently verified by DylibScope. Scores, summaries, comparisons, and security indicators are computed from the values you enter.
       </p>
       <p className="note">
-        Use this form to create a private dataset entry without running LIEF or Ghidra. The backend validates the schema and stores the observation under your anonymous Supabase session.
+        Use this form to create a private dataset entry without running LIEF or Ghidra. Public baseline data is never modified directly.
       </p>
-      <div className="manualFormGrid">
+
+      <div className="manualTargetBox">
         <label>
-          Private dataset name
-          <input value={form.datasetName} onChange={(event) => updateForm('datasetName', event.target.value)} placeholder="my-manual-dataset" />
+          Dataset target
+          <select value={form.targetMode} onChange={(event) => updateForm('targetMode', event.target.value)}>
+            <option value="new_private_dataset">Create a new private dataset</option>
+            <option value="append_private_dataset">Append to an existing private dataset</option>
+            <option value="clone_public_baseline">Clone public-baseline and append</option>
+          </select>
         </label>
+        {form.targetMode === 'new_private_dataset' ? (
+          <label>
+            New private dataset name
+            <input value={form.datasetName} onChange={(event) => updateForm('datasetName', event.target.value)} placeholder="my-manual-dataset" />
+          </label>
+        ) : null}
+        {form.targetMode === 'append_private_dataset' ? (
+          <label>
+            Existing private dataset
+            <select value={form.existingDatasetName} onChange={(event) => updateForm('existingDatasetName', event.target.value)} disabled={!privateDatasets.length}>
+              {privateDatasets.length ? privateDatasets.map((dataset) => (
+                <option key={dataset.name} value={dataset.name}>{datasetLabel(dataset)}</option>
+              )) : <option value="">No private datasets available</option>}
+            </select>
+          </label>
+        ) : null}
+        {form.targetMode === 'clone_public_baseline' ? (
+          <>
+            <label>
+              Private clone dataset name
+              <input value={form.cloneDatasetName} onChange={(event) => updateForm('cloneDatasetName', event.target.value)} placeholder="public-baseline-with-manual-additions" />
+            </label>
+            <p className="schemaHint">
+              This creates a private copy of <code>{DEFAULT_DATASET}</code>, then appends your manual observation to that copy. Future observations should use append mode with the cloned dataset.
+            </p>
+          </>
+        ) : null}
+      </div>
+
+      <div className="manualFormGrid">
         <label>
           Library basename
           <input value={form.library} onChange={(event) => updateForm('library', event.target.value)} placeholder="libExample.dylib" />
@@ -902,7 +998,7 @@ function UserObservationForm({ authState, onObservationCreated }) {
         <div className="successBox">
           <strong>Manual observation saved.</strong>
           <p>
-            Dataset <code>{result.dataset_name}</code> is private, user-provided, and now available in the dataset selector.
+            Dataset <code>{result.dataset_name}</code> is private and now available in the dataset selector. Source: <code>{result.dataset_source_type}</code>. Trust: <code>{result.dataset_trust_level}</code>.
           </p>
           <p className="muted">Metric count: {result.metric_count}. Library: <code>{result.library}</code>. iOS version: <code>{result.ios_version}</code>.</p>
         </div>
@@ -1745,6 +1841,8 @@ export default function App() {
       />
       <UserObservationForm
         authState={authState}
+        datasets={datasets}
+        selectedDataset={selectedDataset}
         onObservationCreated={(datasetName) => {
           setSelectedDataset(datasetName);
           setDatasetRefreshKey((value) => value + 1);

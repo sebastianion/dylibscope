@@ -21,7 +21,10 @@ PUBLIC_DATASET_VISIBILITY = "public"
 
 USER_MANUAL_SOURCE_TYPE = "user_manual"
 USER_MANUAL_TRUST_LEVEL = "user_provided_unverified"
+PUBLIC_BASELINE_CLONE_SOURCE_TYPE = "public_baseline_clone_with_user_manual"
+MIXED_VERIFIED_MANUAL_TRUST_LEVEL = "mixed_verified_and_user_provided"
 PRIVATE_DATASET_VISIBILITY = "private"
+PUBLIC_BASELINE_DATASET_NAME = "public-baseline"
 
 
 def _scalar_id(row: Any) -> int:
@@ -93,26 +96,194 @@ def _metric_definition_map(conn: Connection) -> Dict[str, Dict[str, str]]:
     return {str(row["name"]): {"level": str(row["level"]), "value_type": str(row["value_type"])} for row in rows}
 
 
-def ensure_user_manual_dataset(conn: Connection, dataset_name: str, owner_user_id: str) -> int:
-    """Create or update a private user-owned manual dataset."""
+def _dataset_row_by_name(conn: Connection, dataset_name: str) -> Optional[RowMapping]:
     row = conn.execute(
-        select(datasets.c.id, datasets.c.owner_user_id, datasets.c.visibility).where(datasets.c.name == dataset_name)
-    ).first()
-    values = {
-        "source": USER_MANUAL_SOURCE_TYPE,
-        "visibility": PRIVATE_DATASET_VISIBILITY,
-        "owner_user_id": owner_user_id,
-        "source_type": USER_MANUAL_SOURCE_TYPE,
-        "trust_level": USER_MANUAL_TRUST_LEVEL,
-    }
-    if row:
-        if row.owner_user_id != owner_user_id or row.visibility != PRIVATE_DATASET_VISIBILITY:
-            raise ValueError("dataset name is already used by another visible dataset")
-        dataset_id = _scalar_id(row)
-        conn.execute(datasets.update().where(datasets.c.id == dataset_id).values(**values))
-        return dataset_id
+        select(
+            datasets.c.id,
+            datasets.c.name,
+            datasets.c.owner_user_id,
+            datasets.c.visibility,
+            datasets.c.source,
+            datasets.c.source_type,
+            datasets.c.trust_level,
+        ).where(datasets.c.name == dataset_name)
+    ).mappings().first()
+    return row
 
-    return _insert_and_fetch_id(conn, datasets, {"name": dataset_name, **values}, datasets.c.name == dataset_name)
+
+def _create_private_dataset(
+    conn: Connection,
+    *,
+    dataset_name: str,
+    owner_user_id: str,
+    source: str,
+    source_type: str,
+    trust_level: str,
+) -> int:
+    return _insert_and_fetch_id(
+        conn,
+        datasets,
+        {
+            "name": dataset_name,
+            "source": source,
+            "visibility": PRIVATE_DATASET_VISIBILITY,
+            "owner_user_id": owner_user_id,
+            "source_type": source_type,
+            "trust_level": trust_level,
+        },
+        datasets.c.name == dataset_name,
+    )
+
+
+def ensure_user_manual_dataset(conn: Connection, dataset_name: str, owner_user_id: str) -> int:
+    """Create a private manual dataset, or reuse an existing private user-owned dataset.
+
+    Existing private datasets keep their provenance/trust metadata. This matters for
+    cloned baseline datasets, whose metadata should remain mixed rather than being
+    downgraded to plain user_manual on later appends.
+    """
+    row = _dataset_row_by_name(conn, dataset_name)
+    if row:
+        if row["owner_user_id"] != owner_user_id or row["visibility"] != PRIVATE_DATASET_VISIBILITY:
+            raise ValueError("dataset name is already used by another visible dataset")
+        return int(row["id"])
+
+    return _create_private_dataset(
+        conn,
+        dataset_name=dataset_name,
+        owner_user_id=owner_user_id,
+        source=USER_MANUAL_SOURCE_TYPE,
+        source_type=USER_MANUAL_SOURCE_TYPE,
+        trust_level=USER_MANUAL_TRUST_LEVEL,
+    )
+
+
+def create_new_user_manual_dataset(conn: Connection, dataset_name: str, owner_user_id: str) -> int:
+    """Create a new private manual dataset and reject accidental appends."""
+    if _dataset_row_by_name(conn, dataset_name):
+        raise ValueError("dataset already exists; choose append-to-existing or a different dataset name")
+    return _create_private_dataset(
+        conn,
+        dataset_name=dataset_name,
+        owner_user_id=owner_user_id,
+        source=USER_MANUAL_SOURCE_TYPE,
+        source_type=USER_MANUAL_SOURCE_TYPE,
+        trust_level=USER_MANUAL_TRUST_LEVEL,
+    )
+
+
+def ensure_existing_private_user_dataset(conn: Connection, dataset_name: str, owner_user_id: str) -> int:
+    """Return an existing private dataset owned by the current user."""
+    row = _dataset_row_by_name(conn, dataset_name)
+    if not row:
+        raise ValueError("private target dataset was not found")
+    if row["visibility"] != PRIVATE_DATASET_VISIBILITY or row["owner_user_id"] != owner_user_id:
+        raise ValueError("target dataset is not a private dataset owned by the current user")
+    return int(row["id"])
+
+
+def clone_public_dataset_for_user(
+    conn: Connection,
+    *,
+    source_dataset_name: str,
+    target_dataset_name: str,
+    owner_user_id: str,
+) -> int:
+    """Physically clone a public dataset into a private user-owned dataset."""
+    if _dataset_row_by_name(conn, target_dataset_name):
+        raise ValueError("clone target dataset already exists; append to it instead of cloning again")
+
+    source_row = _dataset_row_by_name(conn, source_dataset_name)
+    if not source_row or source_row["visibility"] != PUBLIC_DATASET_VISIBILITY:
+        raise ValueError("source dataset must be an existing public dataset")
+
+    source_dataset_id = int(source_row["id"])
+    target_dataset_id = _create_private_dataset(
+        conn,
+        dataset_name=target_dataset_name,
+        owner_user_id=owner_user_id,
+        source=source_dataset_name,
+        source_type=PUBLIC_BASELINE_CLONE_SOURCE_TYPE,
+        trust_level=MIXED_VERIFIED_MANUAL_TRUST_LEVEL,
+    )
+
+    conn.execute(
+        text(
+            """
+            INSERT INTO library_observations (
+                dataset_id,
+                library_id,
+                ios_version_id,
+                original_path,
+                hla_source_seen,
+                lla_source_seen
+            )
+            SELECT
+                :target_dataset_id,
+                library_id,
+                ios_version_id,
+                original_path,
+                hla_source_seen,
+                lla_source_seen
+            FROM library_observations
+            WHERE dataset_id = :source_dataset_id
+            """
+        ),
+        {"target_dataset_id": target_dataset_id, "source_dataset_id": source_dataset_id},
+    )
+
+    conn.execute(
+        text(
+            """
+            INSERT INTO metric_values (
+                observation_id,
+                metric_name,
+                numeric_value,
+                text_value,
+                json_value
+            )
+            SELECT
+                new_o.id,
+                mv.metric_name,
+                mv.numeric_value,
+                mv.text_value,
+                mv.json_value
+            FROM metric_values mv
+            JOIN library_observations old_o ON old_o.id = mv.observation_id
+            JOIN library_observations new_o
+              ON new_o.dataset_id = :target_dataset_id
+             AND new_o.library_id = old_o.library_id
+             AND new_o.ios_version_id = old_o.ios_version_id
+            WHERE old_o.dataset_id = :source_dataset_id
+            """
+        ),
+        {"target_dataset_id": target_dataset_id, "source_dataset_id": source_dataset_id},
+    )
+
+    return target_dataset_id
+
+
+def resolve_user_observation_dataset(
+    conn: Connection,
+    *,
+    target_mode: str,
+    dataset_name: str,
+    owner_user_id: str,
+    source_dataset_name: str = PUBLIC_BASELINE_DATASET_NAME,
+) -> int:
+    """Resolve the target dataset for a user-provided observation."""
+    if target_mode == "new_private_dataset":
+        return create_new_user_manual_dataset(conn, dataset_name=dataset_name, owner_user_id=owner_user_id)
+    if target_mode == "append_private_dataset":
+        return ensure_existing_private_user_dataset(conn, dataset_name=dataset_name, owner_user_id=owner_user_id)
+    if target_mode == "clone_public_baseline":
+        return clone_public_dataset_for_user(
+            conn,
+            source_dataset_name=source_dataset_name,
+            target_dataset_name=dataset_name,
+            owner_user_id=owner_user_id,
+        )
+    raise ValueError(f"unsupported target_mode '{target_mode}'")
 
 
 def _get_or_create_library(conn: Connection, library_name: str) -> int:
@@ -233,6 +404,8 @@ def create_user_manual_observation(
     ios_version: str,
     metrics: Dict[str, Any],
     original_path: Optional[str] = None,
+    target_mode: str,
+    source_dataset_name: str = PUBLIC_BASELINE_DATASET_NAME,
 ) -> Dict[str, Any]:
     """Create or update one private manual observation and return the resolved observation."""
     definitions = _metric_definition_map(conn)
@@ -243,7 +416,13 @@ def create_user_manual_observation(
     if unknown_metrics:
         raise ValueError(f"unknown metric(s): {', '.join(unknown_metrics)}")
 
-    dataset_id = ensure_user_manual_dataset(conn, dataset_name=dataset_name, owner_user_id=owner_user_id)
+    dataset_id = resolve_user_observation_dataset(
+        conn,
+        target_mode=target_mode,
+        dataset_name=dataset_name,
+        owner_user_id=owner_user_id,
+        source_dataset_name=source_dataset_name,
+    )
     library_id = _get_or_create_library(conn, library_name)
     ios_version_id = _get_or_create_ios_version(conn, ios_version)
     has_hla_metrics = any(definitions[name]["level"] == "high" for name in metrics)

@@ -34,6 +34,7 @@ from dylibscope.storage.repository import (
 from dylibscope.storage.schema import connect
 
 MetricLevel = Literal["high", "low", "all"]
+UserObservationTargetMode = Literal["new_private_dataset", "append_private_dataset", "clone_public_baseline"]
 
 PUBLIC_BASELINE_DATASET_NAME = "public-baseline"
 USER_PROVIDED_WARNING = (
@@ -46,11 +47,19 @@ USER_PROVIDED_WARNING = (
 class UserObservationRequest(BaseModel):
     """Manual user-provided observation inserted into a private dataset."""
 
-    dataset_name: str = Field(..., description="Private user dataset to create or update. Cannot be public-baseline.")
+    dataset_name: str = Field(..., description="Target private dataset name.")
     library: str = Field(..., description="Library basename, for example libExample.dylib.")
     ios_version: str = Field(..., description="Full firmware label or user-supplied iOS version label.")
     metrics: Dict[str, Any] = Field(..., description="Schema-valid metric names and values.")
     original_path: Optional[str] = Field(default=None, description="Optional source path for the observation.")
+    target_mode: UserObservationTargetMode = Field(
+        ...,
+        description=(
+            "How to resolve the target dataset: create a new private dataset, append to an existing private dataset, "
+            "or clone public-baseline into a private dataset before appending."
+        ),
+    )
+    source_dataset_name: str = Field(default=PUBLIC_BASELINE_DATASET_NAME, description="Public source dataset used for clone_public_baseline.")
 
     @field_validator("dataset_name")
     @classmethod
@@ -59,7 +68,15 @@ class UserObservationRequest(BaseModel):
         if not cleaned:
             raise ValueError("dataset_name is required.")
         if cleaned == PUBLIC_BASELINE_DATASET_NAME:
-            raise ValueError("public-baseline is read-only and cannot receive user-provided observations.")
+            raise ValueError("public-baseline is read-only. Clone it into a private dataset before adding observations.")
+        return cleaned
+
+    @field_validator("source_dataset_name")
+    @classmethod
+    def validate_source_dataset_name(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("source_dataset_name is required for clone mode.")
         return cleaned
 
     @field_validator("library")
@@ -441,16 +458,20 @@ def create_app(
                 ios_version=request.ios_version,
                 metrics=request.metrics,
                 original_path=request.original_path,
+                target_mode=request.target_mode,
+                source_dataset_name=request.source_dataset_name,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         return {
             "operation": "upserted_user_observation",
+            "target_mode": request.target_mode,
+            "source_dataset_name": request.source_dataset_name if request.target_mode == "clone_public_baseline" else None,
             "dataset_name": request.dataset_name,
-            "dataset_visibility": "private",
-            "dataset_source_type": "user_manual",
-            "dataset_trust_level": "user_provided_unverified",
+            "dataset_visibility": observation.get("dataset_visibility", "private"),
+            "dataset_source_type": observation.get("dataset_source_type", "user_manual"),
+            "dataset_trust_level": observation.get("dataset_trust_level", "user_provided_unverified"),
             "library": request.library,
             "ios_version": request.ios_version,
             "metric_count": len(request.metrics),
