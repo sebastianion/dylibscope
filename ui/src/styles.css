@@ -990,3 +990,13 @@ code {
   }
 }
 
+
+.observationManager {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.observationDetail {
+  margin-top: 0;
+}

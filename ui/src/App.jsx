@@ -1166,10 +1166,32 @@ function UserObservationManager({ authState, datasets, selectedDataset, refreshK
     [datasets, selectedDataset],
   );
   const [observations, setObservations] = useState([]);
+  const [selectedLibrary, setSelectedLibrary] = useState('');
+  const [selectedObservationKey, setSelectedObservationKey] = useState('');
   const [loading, setLoading] = useState(false);
   const [deletingKey, setDeletingKey] = useState('');
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
+
+  function observationKey(observation) {
+    return `${observation.library}::${observation.ios_version}`;
+  }
+
+  const libraryOptions = useMemo(
+    () => Array.from(new Set(observations.map((observation) => observation.library))).sort((a, b) => a.localeCompare(b)),
+    [observations],
+  );
+
+  const observationsForSelectedLibrary = useMemo(
+    () => observations.filter((observation) => observation.library === selectedLibrary),
+    [observations, selectedLibrary],
+  );
+
+  const selectedObservation = useMemo(() => {
+    if (!observationsForSelectedLibrary.length) return null;
+    if (observationsForSelectedLibrary.length === 1) return observationsForSelectedLibrary[0];
+    return observationsForSelectedLibrary.find((observation) => observationKey(observation) === selectedObservationKey) || null;
+  }, [observationsForSelectedLibrary, selectedObservationKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1205,6 +1227,44 @@ function UserObservationManager({ authState, datasets, selectedDataset, refreshK
     };
   }, [authState.configured, authState.authenticated, selectedDataset, selectedPrivateDataset, refreshKey]);
 
+  useEffect(() => {
+    if (!libraryOptions.length) {
+      setSelectedLibrary('');
+      setSelectedObservationKey('');
+      return;
+    }
+
+    if (!selectedLibrary || !libraryOptions.includes(selectedLibrary)) {
+      setSelectedLibrary(libraryOptions[0]);
+      setSelectedObservationKey('');
+    }
+  }, [libraryOptions, selectedLibrary]);
+
+  useEffect(() => {
+    if (!observationsForSelectedLibrary.length) {
+      setSelectedObservationKey('');
+      return;
+    }
+
+    const keys = observationsForSelectedLibrary.map((observation) => observationKey(observation));
+    if (!selectedObservationKey || !keys.includes(selectedObservationKey)) {
+      setSelectedObservationKey(keys[0]);
+    }
+  }, [observationsForSelectedLibrary, selectedObservationKey]);
+
+  function handleLibraryChange(event) {
+    setSelectedLibrary(event.target.value);
+    setSelectedObservationKey('');
+    setError('');
+    setResult(null);
+  }
+
+  function handleObservationChange(event) {
+    setSelectedObservationKey(event.target.value);
+    setError('');
+    setResult(null);
+  }
+
   async function deleteObservation(observation) {
     setError('');
     setResult(null);
@@ -1214,7 +1274,7 @@ function UserObservationManager({ authState, datasets, selectedDataset, refreshK
     );
     if (!confirmed) return;
 
-    const key = `${observation.library}::${observation.ios_version}`;
+    const key = observationKey(observation);
     setDeletingKey(key);
     try {
       const response = await apiDelete('/v1/user-observations', {
@@ -1242,34 +1302,63 @@ function UserObservationManager({ authState, datasets, selectedDataset, refreshK
       ) : !observations.length ? (
         <p className="emptyChartState">No observations are stored in this private dataset yet.</p>
       ) : (
-        <div className="observationList">
-          {observations.map((observation) => {
-            const key = `${observation.library}::${observation.ios_version}`;
-            return (
-              <div className="observationRow" key={key}>
-                <div>
-                  <strong>{observation.library}</strong>
-                  <p className="muted">
-                    iOS: {versionDisplayLabel(observation)} · Metrics: {observation.metric_count || Object.keys(observation.metrics || {}).length}
-                    {observation.original_path ? <> · Path: <code>{observation.original_path}</code></> : null}
-                  </p>
-                </div>
-                <div className="rowActions">
-                  <button type="button" className="secondaryButton" onClick={() => onReplaceObservation?.(observation)}>
-                    Replace
-                  </button>
-                  <LoadingButton
-                    loading={deletingKey === key}
-                    disabled={Boolean(deletingKey)}
-                    onClick={() => deleteObservation(observation)}
-                    className="dangerButton"
-                  >
-                    Delete
-                  </LoadingButton>
-                </div>
+        <div className="observationManager">
+          <p className="note">
+            This private dataset contains {observations.length} observations. Select a library to inspect or manage one observation at a time.
+          </p>
+          <div className={observationsForSelectedLibrary.length > 1 ? 'formGrid two' : 'formGrid compact'}>
+            <label>
+              Library
+              <select value={selectedLibrary} onChange={handleLibraryChange}>
+                {libraryOptions.map((library) => (
+                  <option key={library} value={library}>
+                    {library}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {observationsForSelectedLibrary.length > 1 ? (
+              <label>
+                iOS version
+                <select value={selectedObservationKey} onChange={handleObservationChange}>
+                  {observationsForSelectedLibrary.map((observation) => (
+                    <option key={observationKey(observation)} value={observationKey(observation)}>
+                      {versionDisplayLabel(observation)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+          </div>
+
+          {selectedObservation ? (
+            <div className="observationRow observationDetail">
+              <div>
+                <strong>{selectedObservation.library}</strong>
+                <p className="muted">
+                  iOS: {versionDisplayLabel(selectedObservation)} · Metrics:{' '}
+                  {selectedObservation.metric_count || Object.keys(selectedObservation.metrics || {}).length}
+                  {selectedObservation.original_path ? <> · Path: <code>{selectedObservation.original_path}</code></> : null}
+                </p>
               </div>
-            );
-          })}
+              <div className="rowActions">
+                <button type="button" className="secondaryButton" onClick={() => onReplaceObservation?.(selectedObservation)}>
+                  Replace
+                </button>
+                <LoadingButton
+                  loading={deletingKey === observationKey(selectedObservation)}
+                  disabled={Boolean(deletingKey)}
+                  onClick={() => deleteObservation(selectedObservation)}
+                  className="dangerButton"
+                >
+                  Delete
+                </LoadingButton>
+              </div>
+            </div>
+          ) : (
+            <p className="emptyChartState">Select a library and iOS version to inspect an observation.</p>
+          )}
         </div>
       )}
       <ErrorBox error={error} />
