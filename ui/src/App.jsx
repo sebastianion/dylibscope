@@ -1067,7 +1067,7 @@ function PrivateDatasetManager({ authState, datasets, selectedDataset, onDataset
     }
 
     const confirmed = window.confirm(
-      `Delete private dataset "${dataset.name}"?\n\nThis removes all observations and metric values in this private dataset. Public-baseline cannot be deleted.`,
+      `Delete private dataset "${dataset.name}"?\n\nThis will permanently remove all observations and metric values stored in this private dataset. This action cannot be undone.`,
     );
     if (!confirmed) return;
 
@@ -1086,7 +1086,7 @@ function PrivateDatasetManager({ authState, datasets, selectedDataset, onDataset
   return (
     <Card title="Your private datasets">
       <p className="note">
-        Delete test or temporary private datasets from your current account scope. This cannot delete public-baseline or another user's private datasets.
+        Delete test or temporary private datasets from your current account scope.
       </p>
       {!privateDatasets.length ? (
         <p className="emptyChartState">No private datasets are available in this session.</p>
