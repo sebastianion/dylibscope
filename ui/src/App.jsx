@@ -838,7 +838,7 @@ function buildManualObservationPayload(form, metricValues, datasets) {
       target_mode: form.targetMode,
       dataset_name: targetDatasetName,
       source_dataset_name: form.targetMode === 'clone_public_baseline' ? DEFAULT_DATASET : undefined,
-      conflict_mode: form.conflictMode,
+      conflict_mode: form.targetMode === 'new_private_dataset' ? 'reject' : form.conflictMode,
       library: form.library.trim(),
       ios_version: form.iosVersion.trim(),
       original_path: form.originalPath.trim() || undefined,
@@ -919,7 +919,12 @@ function UserObservationForm({ authState, datasets, selectedDataset, onObservati
   }, [prefillObservation, selectedDataset]);
 
   function updateForm(key, value) {
-    setForm((current) => ({ ...current, [key]: value }));
+    setForm((current) => {
+      if (key === 'targetMode' && value === 'new_private_dataset') {
+        return { ...current, targetMode: value, conflictMode: 'reject' };
+      }
+      return { ...current, [key]: value };
+    });
   }
 
   function updateMetric(name, value) {
@@ -959,11 +964,6 @@ function UserObservationForm({ authState, datasets, selectedDataset, onObservati
         Use this form to create a private dataset entry without running LIEF or Ghidra. Public baseline data is never modified directly. Values entered here are not independently verified.
       </p>
 
-      {form.conflictMode === 'replace' ? (
-        <p className="warningText">
-          You are replacing an existing observation. Submitting this form will overwrite the stored metric values for the same dataset, library, and iOS version.
-        </p>
-      ) : null}
 
       <div className="manualTargetBox">
         <label>
@@ -1003,18 +1003,22 @@ function UserObservationForm({ authState, datasets, selectedDataset, onObservati
         ) : null}
       </div>
 
-      <div className="manualTargetBox">
-        <label>
-          Duplicate library/iOS behavior
-          <select value={form.conflictMode} onChange={(event) => updateForm('conflictMode', event.target.value)}>
-            <option value="reject">Reject if this library/iOS entry already exists</option>
-            <option value="replace">Replace existing observation explicitly</option>
-          </select>
-        </label>
-        <p className="schemaHint">
-          Default reject mode prevents silent overwrites. Use replace only when you intentionally want to replace the metrics for the same dataset, library, and iOS version.
-        </p>
-      </div>
+      {form.targetMode !== 'new_private_dataset' ? (
+        <div className="manualTargetBox">
+          <label>
+            Duplicate library/iOS behavior
+            <select value={form.conflictMode} onChange={(event) => updateForm('conflictMode', event.target.value)}>
+              <option value="reject">Reject if this library/iOS entry already exists</option>
+              <option value="replace">Replace existing observation explicitly</option>
+            </select>
+          </label>
+          <p className="schemaHint">
+            {form.conflictMode === 'replace'
+              ? 'Submitting with replace mode will overwrite the stored metric values for the same dataset, library, and iOS version.'
+              : 'Default reject mode prevents silent overwrites. If the same library and iOS version already exist in the target dataset, the request will be rejected.'}
+          </p>
+        </div>
+      ) : null}
 
 
       <div className="manualFormGrid">
