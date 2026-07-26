@@ -959,6 +959,12 @@ function UserObservationForm({ authState, datasets, selectedDataset, onObservati
         Use this form to create a private dataset entry without running LIEF or Ghidra. Public baseline data is never modified directly. Values entered here are not independently verified.
       </p>
 
+      {form.conflictMode === 'replace' ? (
+        <p className="warningText">
+          You are replacing an existing observation. Submitting this form will overwrite the stored metric values for the same dataset, library, and iOS version.
+        </p>
+      ) : null}
+
       <div className="manualTargetBox">
         <label>
           Dataset target
@@ -1344,7 +1350,7 @@ function UserObservationManager({ authState, datasets, selectedDataset, refreshK
               </div>
               <div className="rowActions">
                 <button type="button" className="secondaryButton" onClick={() => onReplaceObservation?.(selectedObservation)}>
-                  Replace
+                  Edit / Replace
                 </button>
                 <LoadingButton
                   loading={deletingKey === observationKey(selectedObservation)}
