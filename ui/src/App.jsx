@@ -248,19 +248,40 @@ function datasetDisplayName(dataset) {
   return dataset?.name || DEFAULT_DATASET;
 }
 
+function datasetVisibilityDisplay(dataset) {
+  const visibility = dataset?.visibility || 'public';
+  if (visibility === 'public') return 'Public';
+  if (visibility === 'private') return 'Private';
+  return visibility.replaceAll('_', ' ');
+}
+
+function datasetSourceDisplay(dataset) {
+  const source = dataset?.source_type || 'public_baseline';
+  if (source === 'public_baseline') return 'Verified baseline';
+  if (source === 'user_manual') return 'Manual user dataset';
+  if (source === 'public_baseline_clone_with_user_manual') return 'Baseline clone + manual additions';
+  return source.replaceAll('_', ' ');
+}
+
 function datasetTrustDisplay(dataset) {
+  const trust = dataset?.trust_level || dataset?.trust || '';
+  if (trust === 'verified_pipeline_output') return 'Verified pipeline output';
+  if (trust === 'user_provided_unverified') return 'User-provided, unverified';
+  if (trust === 'mixed_verified_and_user_provided') return 'Mixed verified + user-provided';
+  return trust ? trust.replaceAll('_', ' ') : 'Unknown trust';
+}
+
+function datasetShortTrustDisplay(dataset) {
   const trust = dataset?.trust_level || dataset?.trust || '';
   if (trust === 'verified_pipeline_output') return 'Verified baseline';
   if (trust === 'user_provided_unverified') return 'User-provided';
-  if (trust === 'mixed_verified_and_user_provided') return 'Mixed verified + user-provided';
-  return trust || 'Unknown trust';
+  if (trust === 'mixed_verified_and_user_provided') return 'Mixed baseline/manual';
+  return trust ? trust.replaceAll('_', ' ') : 'Unknown trust';
 }
 
 function datasetLabel(dataset) {
   const name = datasetDisplayName(dataset);
-  if (name === DEFAULT_DATASET) return `${name} - Public baseline`;
-  const visibility = dataset?.visibility === 'private' ? 'Private' : dataset?.visibility || 'Public';
-  return `${name} - ${visibility}, ${datasetTrustDisplay(dataset)}`;
+  return `${name} - ${datasetVisibilityDisplay(dataset)} · ${datasetShortTrustDisplay(dataset)}`;
 }
 
 function isUserProvidedDataset(datasetName, datasets) {
@@ -536,7 +557,7 @@ function MetricTimelineChart({ rows, metricName, title = 'Metric evolution', des
   if (rows.length < 2) {
     return (
       <ChartPanel title={title} description={description}>
-        <EmptyChartState>At least two numeric observations are required to draw an evolution chart.</EmptyChartState>
+        <EmptyChartState>Only one observation is available for this library. Add the same library for another iOS version to generate an evolution chart.</EmptyChartState>
       </ChartPanel>
     );
   }
@@ -901,11 +922,8 @@ function UserObservationForm({ authState, datasets, selectedDataset, onObservati
 
   return (
     <Card title="Add manual observation">
-      <p className="warningNote">
-        User-provided observations are not independently verified by DylibScope. Scores, summaries, comparisons, and security indicators are computed from the values you enter.
-      </p>
       <p className="note">
-        Use this form to create a private dataset entry without running LIEF or Ghidra. Public baseline data is never modified directly.
+        Use this form to create a private dataset entry without running LIEF or Ghidra. Public baseline data is never modified directly. Values entered here are not independently verified.
       </p>
 
       <div className="manualTargetBox">
@@ -1104,9 +1122,9 @@ function DatasetSelector({ datasets, selectedDataset, onChange, authState }) {
           </select>
         </label>
         <div className="datasetMeta">
-          <span>Visibility: <strong>{selected?.visibility || 'public'}</strong></span>
-          <span>Source: <strong>{selected?.source_type || 'public_baseline'}</strong></span>
-          <span>Trust: <strong>{selected?.trust_level || 'verified_pipeline_output'}</strong></span>
+          <span>Visibility: <strong>{datasetVisibilityDisplay(selected)}</strong></span>
+          <span>Source: <strong>{datasetSourceDisplay(selected)}</strong></span>
+          <span>Trust: <strong>{datasetTrustDisplay(selected)}</strong></span>
         </div>
       </div>
       <p className="note">
@@ -1115,11 +1133,6 @@ function DatasetSelector({ datasets, selectedDataset, onChange, authState }) {
       {!authState.configured ? (
         <p className="warningNote">
           Supabase Auth is not configured for this UI deployment. Only public datasets will be available.
-        </p>
-      ) : null}
-      {selected?.trust_level === 'user_provided_unverified' ? (
-        <p className="warningNote">
-          User-provided observations are not independently verified by DylibScope. Scores, summaries, comparisons, and security indicators are computed from the values entered by the user.
         </p>
       ) : null}
     </Card>
@@ -1892,7 +1905,7 @@ export default function App() {
         />
         {showUserDatasetBanner ? (
           <div className="userDatasetBanner compact">
-            User-provided or mixed dataset selected. Scores and security summaries are computed from values in this dataset and may be incomplete or incorrect.
+            This dataset contains user-provided values. Scores, summaries, comparisons, and security indicators may be incomplete or incorrect.
           </div>
         ) : null}
       </div>
