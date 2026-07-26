@@ -11,7 +11,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { API_BASE_URL, apiGet, apiPost, setApiAuthToken } from './api.js';
+import { API_BASE_URL, apiDelete, apiGet, apiPost, setApiAuthToken } from './api.js';
 import { authConfigured, ensureAnonymousSession, onAuthStateChange } from './auth.js';
 import { metricDictionary, scoreDictionary } from './metricDictionary.js';
 
@@ -1050,6 +1050,82 @@ function UserObservationForm({ authState, datasets, selectedDataset, onObservati
   );
 }
 
+
+function PrivateDatasetManager({ authState, datasets, selectedDataset, onDatasetDeleted }) {
+  const privateDatasets = useMemo(() => privateDatasetOptions(datasets), [datasets]);
+  const [deletingName, setDeletingName] = useState('');
+  const [error, setError] = useState('');
+  const [result, setResult] = useState(null);
+
+  async function deleteDataset(dataset) {
+    setError('');
+    setResult(null);
+
+    if (!authState.configured || !authState.authenticated) {
+      setError('An authenticated session is required to delete private datasets.');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete private dataset "${dataset.name}"?\n\nThis removes all observations and metric values in this private dataset. Public-baseline cannot be deleted.`,
+    );
+    if (!confirmed) return;
+
+    setDeletingName(dataset.name);
+    try {
+      const response = await apiDelete(`/v1/user-datasets/${encodeURIComponent(dataset.name)}`);
+      setResult(response);
+      onDatasetDeleted?.(dataset.name);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDeletingName('');
+    }
+  }
+
+  return (
+    <Card title="Your private datasets">
+      <p className="note">
+        Delete test or temporary private datasets from your current account scope. This cannot delete public-baseline or another user's private datasets.
+      </p>
+      {!privateDatasets.length ? (
+        <p className="emptyChartState">No private datasets are available in this session.</p>
+      ) : (
+        <div className="privateDatasetList">
+          {privateDatasets.map((dataset) => (
+            <div className="privateDatasetRow" key={dataset.name}>
+              <div>
+                <strong>{datasetDisplayName(dataset)}</strong>
+                <p className="muted">
+                  {datasetVisibilityDisplay(dataset)} · {datasetSourceDisplay(dataset)} · {datasetTrustDisplay(dataset)} · {dataset.observation_count || 0} observations
+                  {dataset.name === selectedDataset ? ' · active dataset' : ''}
+                </p>
+              </div>
+              <LoadingButton
+                loading={deletingName === dataset.name}
+                disabled={Boolean(deletingName) || !authState.authenticated}
+                onClick={() => deleteDataset(dataset)}
+                className="dangerButton"
+              >
+                Delete
+              </LoadingButton>
+            </div>
+          ))}
+        </div>
+      )}
+      <ErrorBox error={error} />
+      {result ? (
+        <div className="successBox">
+          <strong>Private dataset deleted.</strong>
+          <p>
+            Removed <code>{result.dataset_name}</code> with {result.deleted_observations} observations and {result.deleted_metric_values} metric values.
+          </p>
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
 function PublishedDashboards() {
   return (
     <Card title="Published Plotly dashboards">
@@ -1966,6 +2042,17 @@ export default function App() {
               selectedDataset={selectedDataset}
               onObservationCreated={(datasetName) => {
                 setSelectedDataset(datasetName);
+                setDatasetRefreshKey((value) => value + 1);
+              }}
+            />
+            <PrivateDatasetManager
+              authState={authState}
+              datasets={datasets}
+              selectedDataset={selectedDataset}
+              onDatasetDeleted={(datasetName) => {
+                if (datasetName === selectedDataset) {
+                  setSelectedDataset(DEFAULT_DATASET);
+                }
                 setDatasetRefreshKey((value) => value + 1);
               }}
             />

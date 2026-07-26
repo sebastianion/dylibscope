@@ -32,6 +32,10 @@ class DatasetConflictError(ValueError):
     """Raised when a private dataset name conflicts within the current owner scope."""
 
 
+class DatasetNotFoundError(ValueError):
+    """Raised when a private dataset is not found for the current owner scope."""
+
+
 class ObservationConflictError(ValueError):
     """Raised when a manual observation would overwrite an existing library/iOS entry."""
 
@@ -477,6 +481,62 @@ def _storage_values_for_metric(metric_name: str, value_type: str, value: Any) ->
         return {"numeric_value": None, "text_value": None, "json_value": json_dumps_stable(value)}
     raise ValueError(f"metric '{metric_name}' has unsupported value type '{value_type}'")
 
+
+
+def delete_user_dataset(conn: Connection, *, dataset_name: str, owner_user_id: str) -> Dict[str, Any]:
+    """Delete one private dataset owned by the current user.
+
+    Public datasets are immutable through this endpoint. Libraries and iOS-version
+    rows are intentionally preserved because they can be shared by other datasets.
+    """
+    cleaned_name = dataset_name.strip()
+    if not cleaned_name:
+        raise ValueError("dataset_name is required")
+    if cleaned_name == PUBLIC_BASELINE_DATASET_NAME or _public_name_is_reserved(conn, cleaned_name):
+        raise DatasetConflictError("public datasets cannot be deleted")
+
+    dataset_row = _private_dataset_row_by_owner_and_name(
+        conn,
+        dataset_name=cleaned_name,
+        owner_user_id=owner_user_id,
+    )
+    if not dataset_row:
+        raise DatasetNotFoundError("private dataset was not found for the current user")
+
+    dataset_id = int(dataset_row["id"])
+    deleted_observations = int(
+        conn.execute(
+            text("SELECT COUNT(*) FROM library_observations WHERE dataset_id = :dataset_id"),
+            {"dataset_id": dataset_id},
+        ).scalar_one()
+    )
+    deleted_metric_values = int(
+        conn.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM metric_values mv
+                JOIN library_observations o ON o.id = mv.observation_id
+                WHERE o.dataset_id = :dataset_id
+                """
+            ),
+            {"dataset_id": dataset_id},
+        ).scalar_one()
+    )
+
+    observation_ids = select(library_observations.c.id).where(library_observations.c.dataset_id == dataset_id)
+    conn.execute(metric_values.delete().where(metric_values.c.observation_id.in_(observation_ids)))
+    conn.execute(library_observations.delete().where(library_observations.c.dataset_id == dataset_id))
+    conn.execute(datasets.delete().where(datasets.c.id == dataset_id))
+    conn.commit()
+
+    return {
+        "deleted": True,
+        "dataset_name": cleaned_name,
+        "dataset_visibility": PRIVATE_DATASET_VISIBILITY,
+        "deleted_observations": deleted_observations,
+        "deleted_metric_values": deleted_metric_values,
+    }
 
 def create_user_manual_observation(
     conn: Connection,

@@ -24,8 +24,10 @@ from dylibscope.security_analysis.derived_scoring import (
 )
 from dylibscope.storage.repository import (
     DatasetConflictError,
+    DatasetNotFoundError,
     ObservationConflictError,
     create_user_manual_observation,
+    delete_user_dataset,
     dataset_accessible,
     get_library_metrics,
     list_datasets,
@@ -492,6 +494,25 @@ def create_app(
             "warning": USER_PROVIDED_WARNING,
             "observation": observation,
         }
+
+    @app.delete("/v1/user-datasets/{dataset_name:path}")
+    def api_delete_user_dataset(
+        dataset_name: str,
+        conn: Connection = Depends(get_conn),
+        current_user: CurrentUser = Depends(require_current_user),
+    ) -> Dict[str, Any]:
+        try:
+            return delete_user_dataset(
+                conn,
+                dataset_name=dataset_name,
+                owner_user_id=current_user.user_id,
+            )
+        except DatasetNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except DatasetConflictError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/v1/libraries")
     def api_list_libraries(

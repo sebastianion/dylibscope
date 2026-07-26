@@ -903,3 +903,40 @@ code {
     flex: 1 1 42%;
   }
 }
+
+.privateDatasetList {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.privateDatasetRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 18px;
+  background: #f8fafc;
+  padding: 14px;
+}
+
+.privateDatasetRow p {
+  margin: 4px 0 0;
+}
+
+.dangerButton {
+  background: #991b1b;
+}
+
+.dangerButton:hover:not(:disabled) {
+  background: #7f1d1d;
+}
+
+@media (max-width: 700px) {
+  .privateDatasetRow {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+

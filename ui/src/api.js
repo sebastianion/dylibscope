@@ -7,7 +7,6 @@ let accessToken = null;
 export function setApiAuthToken(token) {
   accessToken = token || null;
 }
-
 function buildUrl(path, params = {}) {
   const url = new URL(`${API_BASE_URL}${path}`);
   Object.entries(params).forEach(([key, value]) => {
@@ -22,7 +21,6 @@ function buildUrl(path, params = {}) {
   });
   return url.toString();
 }
-
 function buildHeaders(extraHeaders = {}) {
   const headers = { ...extraHeaders };
   if (accessToken) {
@@ -34,7 +32,6 @@ function buildHeaders(extraHeaders = {}) {
 async function parsePayload(response) {
   return response.json().catch(() => ({}));
 }
-
 export async function apiGet(path, params = {}) {
   const response = await fetch(buildUrl(path, params), {
     headers: buildHeaders(),
@@ -45,12 +42,23 @@ export async function apiGet(path, params = {}) {
   }
   return payload;
 }
-
 export async function apiPost(path, body = {}) {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method: 'POST',
     headers: buildHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(body),
+  });
+  const payload = await parsePayload(response);
+  if (!response.ok) {
+    throw new Error(payload.detail || `Request failed with status ${response.status}`);
+  }
+  return payload;
+}
+
+export async function apiDelete(path) {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: 'DELETE',
+    headers: buildHeaders(),
   });
   const payload = await parsePayload(response);
   if (!response.ok) {
