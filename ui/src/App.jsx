@@ -847,7 +847,24 @@ function buildManualObservationPayload(form, metricValues, datasets) {
   };
 }
 
-function UserObservationForm({ authState, datasets, selectedDataset, onObservationCreated }) {
+
+function manualMetricValuesFromObservation(observation) {
+  const values = { ...MANUAL_EMPTY_VALUES };
+  Object.entries(observation?.metrics || {}).forEach(([name, payload]) => {
+    if (!(name in values)) return;
+    const value = payload?.value;
+    if (Array.isArray(value)) {
+      values[name] = value.join('\n');
+    } else if (value === null || value === undefined) {
+      values[name] = '';
+    } else {
+      values[name] = String(value);
+    }
+  });
+  return values;
+}
+
+function UserObservationForm({ authState, datasets, selectedDataset, onObservationCreated, prefillObservation }) {
   const privateDatasets = useMemo(() => privateDatasetOptions(datasets), [datasets]);
   const [form, setForm] = useState(() => ({
     targetMode: 'new_private_dataset',
@@ -884,6 +901,22 @@ function UserObservationForm({ authState, datasets, selectedDataset, onObservati
       return { ...current, existingDatasetName: preferred.name };
     });
   }, [privateDatasets, selectedDataset]);
+
+  useEffect(() => {
+    if (!prefillObservation) return;
+    setForm((current) => ({
+      ...current,
+      targetMode: 'append_private_dataset',
+      existingDatasetName: prefillObservation.dataset || selectedDataset,
+      conflictMode: 'replace',
+      library: prefillObservation.library || current.library,
+      iosVersion: prefillObservation.ios_version || current.iosVersion,
+      originalPath: prefillObservation.original_path || '',
+    }));
+    setMetricValues(manualMetricValuesFromObservation(prefillObservation));
+    setError('');
+    setResult(null);
+  }, [prefillObservation, selectedDataset]);
 
   function updateForm(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -1119,6 +1152,132 @@ function PrivateDatasetManager({ authState, datasets, selectedDataset, onDataset
           <strong>Private dataset deleted.</strong>
           <p>
             Removed <code>{result.dataset_name}</code> with {result.deleted_observations} observations and {result.deleted_metric_values} metric values.
+          </p>
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
+
+function UserObservationManager({ authState, datasets, selectedDataset, refreshKey, onObservationDeleted, onReplaceObservation }) {
+  const selectedPrivateDataset = useMemo(
+    () => datasets.find((dataset) => dataset.name === selectedDataset && dataset.visibility === 'private'),
+    [datasets, selectedDataset],
+  );
+  const [observations, setObservations] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [deletingKey, setDeletingKey] = useState('');
+  const [error, setError] = useState('');
+  const [result, setResult] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadObservations() {
+      if (!authState.configured || !authState.authenticated || !selectedPrivateDataset) {
+        setObservations([]);
+        return;
+      }
+
+      setLoading(true);
+      setError('');
+      try {
+        const response = await apiGet('/v1/user-observations', { dataset_name: selectedDataset });
+        if (!cancelled) {
+          setObservations(response.observations || []);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err.message);
+          setObservations([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    loadObservations();
+    return () => {
+      cancelled = true;
+    };
+  }, [authState.configured, authState.authenticated, selectedDataset, selectedPrivateDataset, refreshKey]);
+
+  async function deleteObservation(observation) {
+    setError('');
+    setResult(null);
+
+    const confirmed = window.confirm(
+      `Delete observation?\n\nLibrary: ${observation.library}\niOS version: ${observation.ios_release || observation.ios_version}\n\nThis removes only this observation and its metric values. The private dataset itself will remain.`,
+    );
+    if (!confirmed) return;
+
+    const key = `${observation.library}::${observation.ios_version}`;
+    setDeletingKey(key);
+    try {
+      const response = await apiDelete('/v1/user-observations', {
+        dataset_name: selectedDataset,
+        library: observation.library,
+        ios_version: observation.ios_version,
+      });
+      setResult(response);
+      onObservationDeleted?.();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDeletingKey('');
+    }
+  }
+
+  return (
+    <Card title="Observations in selected private dataset">
+      {!selectedPrivateDataset ? (
+        <p className="emptyChartState">Select a private dataset to list and manage its observations.</p>
+      ) : !authState.authenticated ? (
+        <p className="warningNote">An authenticated session is required to manage private observations.</p>
+      ) : loading ? (
+        <p className="emptyChartState">Loading observations...</p>
+      ) : !observations.length ? (
+        <p className="emptyChartState">No observations are stored in this private dataset yet.</p>
+      ) : (
+        <div className="observationList">
+          {observations.map((observation) => {
+            const key = `${observation.library}::${observation.ios_version}`;
+            return (
+              <div className="observationRow" key={key}>
+                <div>
+                  <strong>{observation.library}</strong>
+                  <p className="muted">
+                    iOS: {versionDisplayLabel(observation)} · Metrics: {observation.metric_count || Object.keys(observation.metrics || {}).length}
+                    {observation.original_path ? <> · Path: <code>{observation.original_path}</code></> : null}
+                  </p>
+                </div>
+                <div className="rowActions">
+                  <button type="button" className="secondaryButton" onClick={() => onReplaceObservation?.(observation)}>
+                    Replace
+                  </button>
+                  <LoadingButton
+                    loading={deletingKey === key}
+                    disabled={Boolean(deletingKey)}
+                    onClick={() => deleteObservation(observation)}
+                    className="dangerButton"
+                  >
+                    Delete
+                  </LoadingButton>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <ErrorBox error={error} />
+      {result ? (
+        <div className="successBox">
+          <strong>Observation deleted.</strong>
+          <p>
+            Removed <code>{result.library}</code> for <code>{result.ios_version}</code> from <code>{result.dataset_name}</code>.
           </p>
         </div>
       ) : null}
@@ -1853,6 +2012,8 @@ export default function App() {
     error: '',
   });
   const [activePage, setActivePage] = useState('overview');
+  const [observationRefreshKey, setObservationRefreshKey] = useState(0);
+  const [observationPrefill, setObservationPrefill] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -1955,7 +2116,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [authState.loading, authState.authenticated, selectedDataset]);
+  }, [authState.loading, authState.authenticated, selectedDataset, datasetRefreshKey]);
 
   const showUserDatasetBanner = isUserProvidedDataset(selectedDataset, datasets);
 
@@ -2040,10 +2201,24 @@ export default function App() {
               authState={authState}
               datasets={datasets}
               selectedDataset={selectedDataset}
+              prefillObservation={observationPrefill}
               onObservationCreated={(datasetName) => {
                 setSelectedDataset(datasetName);
                 setDatasetRefreshKey((value) => value + 1);
+                setObservationRefreshKey((value) => value + 1);
+                setObservationPrefill(null);
               }}
+            />
+            <UserObservationManager
+              authState={authState}
+              datasets={datasets}
+              selectedDataset={selectedDataset}
+              refreshKey={observationRefreshKey}
+              onObservationDeleted={() => {
+                setDatasetRefreshKey((value) => value + 1);
+                setObservationRefreshKey((value) => value + 1);
+              }}
+              onReplaceObservation={(observation) => setObservationPrefill({ ...observation, loadedAt: Date.now() })}
             />
             <PrivateDatasetManager
               authState={authState}
@@ -2054,6 +2229,7 @@ export default function App() {
                   setSelectedDataset(DEFAULT_DATASET);
                 }
                 setDatasetRefreshKey((value) => value + 1);
+                setObservationRefreshKey((value) => value + 1);
               }}
             />
           </>

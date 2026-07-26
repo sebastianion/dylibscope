@@ -28,12 +28,14 @@ from dylibscope.storage.repository import (
     ObservationConflictError,
     create_user_manual_observation,
     delete_user_dataset,
+    delete_user_observation,
     dataset_accessible,
     get_library_metrics,
     list_datasets,
     list_ios_versions,
     list_libraries,
     list_observations_for_ios_version,
+    list_user_observations,
 )
 from dylibscope.storage.schema import connect
 
@@ -506,6 +508,55 @@ def create_app(
                 conn,
                 dataset_name=dataset_name,
                 owner_user_id=current_user.user_id,
+            )
+        except DatasetNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except DatasetConflictError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+    @app.get("/v1/user-observations")
+    def api_list_user_observations(
+        dataset_name: str = Query(..., description="Private dataset name owned by the current user."),
+        conn: Connection = Depends(get_conn),
+        current_user: CurrentUser = Depends(require_current_user),
+    ) -> Dict[str, Any]:
+        try:
+            observations = list_user_observations(
+                conn,
+                dataset_name=dataset_name,
+                owner_user_id=current_user.user_id,
+            )
+        except DatasetNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except DatasetConflictError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return {
+            "dataset_name": dataset_name,
+            "count": len(observations),
+            "observations": observations,
+        }
+
+    @app.delete("/v1/user-observations")
+    def api_delete_user_observation(
+        dataset_name: str = Query(..., description="Private dataset name owned by the current user."),
+        library: str = Query(..., description="Library basename."),
+        ios_version: str = Query(..., description="Full firmware label or parsed iOS release."),
+        conn: Connection = Depends(get_conn),
+        current_user: CurrentUser = Depends(require_current_user),
+    ) -> Dict[str, Any]:
+        try:
+            return delete_user_observation(
+                conn,
+                dataset_name=dataset_name,
+                owner_user_id=current_user.user_id,
+                library_name=library,
+                ios_version=ios_version,
             )
         except DatasetNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc

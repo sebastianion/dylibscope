@@ -940,3 +940,53 @@ code {
   }
 }
 
+.observationList {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.observationRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 18px;
+  background: #f8fafc;
+  padding: 14px;
+}
+
+.observationRow p {
+  margin: 4px 0 0;
+}
+
+.rowActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.secondaryButton {
+  background: #334155;
+}
+
+.secondaryButton:hover:not(:disabled) {
+  background: #1e293b;
+}
+
+@media (max-width: 700px) {
+  .observationRow {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .rowActions {
+    width: 100%;
+  }
+
+  .rowActions button {
+    width: 100%;
+  }
+}
+

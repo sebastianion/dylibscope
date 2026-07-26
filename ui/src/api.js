@@ -55,8 +55,8 @@ export async function apiPost(path, body = {}) {
   return payload;
 }
 
-export async function apiDelete(path) {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+export async function apiDelete(path, params = {}) {
+  const response = await fetch(buildUrl(path, params), {
     method: 'DELETE',
     headers: buildHeaders(),
   });

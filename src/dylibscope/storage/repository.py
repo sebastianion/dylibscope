@@ -538,6 +538,166 @@ def delete_user_dataset(conn: Connection, *, dataset_name: str, owner_user_id: s
         "deleted_metric_values": deleted_metric_values,
     }
 
+
+def list_user_observations(conn: Connection, *, dataset_name: str, owner_user_id: str) -> List[Dict[str, Any]]:
+    """List observations stored in one private dataset owned by the current user."""
+    cleaned_name = dataset_name.strip()
+    if not cleaned_name:
+        raise ValueError("dataset_name is required")
+    if cleaned_name == PUBLIC_BASELINE_DATASET_NAME or _public_name_is_reserved(conn, cleaned_name):
+        raise DatasetConflictError("public datasets cannot be managed through user observation endpoints")
+
+    dataset_row = _private_dataset_row_by_owner_and_name(
+        conn,
+        dataset_name=cleaned_name,
+        owner_user_id=owner_user_id,
+    )
+    if not dataset_row:
+        raise DatasetNotFoundError("private dataset was not found for the current user")
+
+    rows = conn.execute(
+        text(
+            """
+            SELECT
+                o.id AS observation_id,
+                d.name AS dataset_name,
+                d.visibility AS dataset_visibility,
+                d.owner_user_id AS dataset_owner_user_id,
+                COALESCE(d.source_type, d.source) AS dataset_source_type,
+                COALESCE(d.trust_level, 'unknown') AS dataset_trust_level,
+                l.display_name AS library,
+                iv.version_label AS ios_version,
+                iv.device_model,
+                iv.ios_release,
+                iv.build_number,
+                o.original_path,
+                o.hla_source_seen,
+                o.lla_source_seen,
+                mv.metric_name,
+                md.level,
+                mv.numeric_value,
+                mv.text_value,
+                mv.json_value
+            FROM library_observations o
+            JOIN datasets d ON d.id = o.dataset_id
+            JOIN libraries l ON l.id = o.library_id
+            JOIN ios_versions iv ON iv.id = o.ios_version_id
+            LEFT JOIN metric_values mv ON mv.observation_id = o.id
+            LEFT JOIN metric_definitions md ON md.name = mv.metric_name
+            WHERE d.id = :dataset_id
+            ORDER BY l.display_name, iv.ios_release, iv.build_number, iv.version_label, mv.metric_name
+            """
+        ),
+        {"dataset_id": int(dataset_row["id"])},
+    ).mappings().fetchall()
+
+    grouped: Dict[int, Dict[str, Any]] = {}
+    for row in rows:
+        observation_id = int(row["observation_id"])
+        if observation_id not in grouped:
+            grouped[observation_id] = {
+                "observation_id": observation_id,
+                "dataset": row["dataset_name"],
+                "dataset_visibility": row.get("dataset_visibility"),
+                "dataset_owner_user_id": row.get("dataset_owner_user_id"),
+                "dataset_source_type": row.get("dataset_source_type"),
+                "dataset_trust_level": row.get("dataset_trust_level"),
+                "library": row["library"],
+                "ios_version": row["ios_version"],
+                "device_model": row["device_model"],
+                "ios_release": row["ios_release"],
+                "build_number": row["build_number"],
+                "original_path": row["original_path"],
+                "hla_source_seen": bool(row["hla_source_seen"]),
+                "lla_source_seen": bool(row["lla_source_seen"]),
+                "metrics": {},
+            }
+        if row["metric_name"] is not None:
+            grouped[observation_id]["metrics"][row["metric_name"]] = {
+                "level": row["level"],
+                "value": _coerce_metric_value(row),
+            }
+
+    observations = list(grouped.values())
+    for observation in observations:
+        observation["metric_count"] = len(observation["metrics"])
+    return observations
+
+
+def delete_user_observation(
+    conn: Connection,
+    *,
+    dataset_name: str,
+    owner_user_id: str,
+    library_name: str,
+    ios_version: str,
+) -> Dict[str, Any]:
+    """Delete one observation from a private dataset owned by the current user."""
+    cleaned_name = dataset_name.strip()
+    cleaned_library = library_name.strip()
+    cleaned_ios_version = ios_version.strip()
+    if not cleaned_name:
+        raise ValueError("dataset_name is required")
+    if not cleaned_library:
+        raise ValueError("library is required")
+    if not cleaned_ios_version:
+        raise ValueError("ios_version is required")
+    if cleaned_name == PUBLIC_BASELINE_DATASET_NAME or _public_name_is_reserved(conn, cleaned_name):
+        raise DatasetConflictError("public datasets cannot be modified through user observation endpoints")
+
+    dataset_row = _private_dataset_row_by_owner_and_name(
+        conn,
+        dataset_name=cleaned_name,
+        owner_user_id=owner_user_id,
+    )
+    if not dataset_row:
+        raise DatasetNotFoundError("private dataset was not found for the current user")
+
+    rows = conn.execute(
+        text(
+            """
+            SELECT o.id, iv.version_label, iv.ios_release
+            FROM library_observations o
+            JOIN libraries l ON l.id = o.library_id
+            JOIN ios_versions iv ON iv.id = o.ios_version_id
+            WHERE o.dataset_id = :dataset_id
+              AND l.canonical_name = :canonical_name
+              AND (iv.version_label = :ios_version OR iv.ios_release = :ios_version)
+            ORDER BY iv.version_label
+            """
+        ),
+        {
+            "dataset_id": int(dataset_row["id"]),
+            "canonical_name": canonicalize_library_name(cleaned_library),
+            "ios_version": cleaned_ios_version,
+        },
+    ).mappings().fetchall()
+
+    if not rows:
+        raise DatasetNotFoundError("observation was not found for this private dataset, library, and iOS version")
+    if len(rows) > 1:
+        raise ValueError("multiple observations match this iOS release; use the full firmware label to delete one observation")
+
+    observation_id = int(rows[0]["id"])
+    deleted_metric_values = int(
+        conn.execute(
+            text("SELECT COUNT(*) FROM metric_values WHERE observation_id = :observation_id"),
+            {"observation_id": observation_id},
+        ).scalar_one()
+    )
+    conn.execute(metric_values.delete().where(metric_values.c.observation_id == observation_id))
+    conn.execute(library_observations.delete().where(library_observations.c.id == observation_id))
+    conn.commit()
+
+    return {
+        "deleted": True,
+        "dataset_name": cleaned_name,
+        "library": cleaned_library,
+        "ios_version": rows[0]["version_label"],
+        "deleted_observations": 1,
+        "deleted_metric_values": deleted_metric_values,
+    }
+
 def create_user_manual_observation(
     conn: Connection,
     *,
