@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from contextlib import suppress
 import os
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Literal, Optional, Union
+from tempfile import NamedTemporaryFile
+from typing import Any, Dict, Iterable, Iterator, List, Literal, Optional, Tuple, Union
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import text
@@ -14,6 +16,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from dylibscope.api.auth import CurrentUser, get_optional_current_user, require_current_user
 from dylibscope.api.config import resolve_database_url
+from dylibscope.high_level_analysis.upload_hla import UploadedDylibAnalysisError, analyze_uploaded_dylib
 from dylibscope.security_analysis.derived_scoring import (
     INTERPRETATION_NOTE,
     METRIC_WEIGHTS,
@@ -26,6 +29,7 @@ from dylibscope.storage.repository import (
     DatasetConflictError,
     DatasetNotFoundError,
     ObservationConflictError,
+    create_user_hla_upload_observation,
     create_user_manual_observation,
     delete_user_dataset,
     delete_user_observation,
@@ -42,12 +46,17 @@ from dylibscope.storage.schema import connect
 MetricLevel = Literal["high", "low", "all"]
 UserObservationTargetMode = Literal["new_private_dataset", "append_private_dataset", "clone_public_baseline"]
 UserObservationConflictMode = Literal["reject", "replace"]
+UserUploadTargetMode = Literal["new_private_dataset", "append_private_dataset"]
 
 PUBLIC_BASELINE_DATASET_NAME = "public-baseline"
 USER_PROVIDED_WARNING = (
     "User-provided observations are not independently verified by DylibScope. Scores, summaries, "
     "comparisons, and security indicators are computed from the values supplied by the user. "
     "Incorrect or incomplete entries may produce misleading results."
+)
+USER_UPLOADED_HLA_WARNING = (
+    "Uploaded binaries are parsed only for static high-level Mach-O metadata. DylibScope does not execute "
+    "uploaded files, does not store the raw binary, and does not claim that the uploaded library is safe or unsafe."
 )
 
 
@@ -170,6 +179,58 @@ def _cors_origins_from_env() -> List[str]:
         return ["*"]
     return [origin.strip() for origin in origins.split(",") if origin.strip()]
 
+
+
+def _max_upload_bytes() -> int:
+    try:
+        return int(os.getenv("DYLIBSCOPE_MAX_UPLOAD_BYTES", "15000000"))
+    except ValueError:
+        return 15_000_000
+
+
+def _clean_uploaded_library_name(library_name: Optional[str], filename: Optional[str]) -> str:
+    candidate = (library_name or "").strip() or Path(filename or "").name
+    cleaned = Path(candidate).name.strip()
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="library_name is required when the uploaded filename is empty")
+    if not cleaned.lower().endswith(".dylib"):
+        raise HTTPException(status_code=400, detail="uploaded library name must end in .dylib")
+    return cleaned
+
+
+def _validate_uploaded_filename(filename: Optional[str]) -> None:
+    cleaned = Path(filename or "").name.strip()
+    if not cleaned or not cleaned.lower().endswith(".dylib"):
+        raise HTTPException(status_code=400, detail="upload must be a .dylib file")
+
+
+async def _save_upload_to_temp(upload: UploadFile, max_bytes: int) -> Tuple[Path, int]:
+    suffix = Path(upload.filename or "uploaded.dylib").suffix or ".dylib"
+    tmp_file = NamedTemporaryFile(prefix="dylibscope-upload-", suffix=suffix, delete=False)
+    tmp_path = Path(tmp_file.name)
+    total_bytes = 0
+    try:
+        with tmp_file:
+            while True:
+                chunk = await upload.read(1024 * 1024)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                if total_bytes > max_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"uploaded file exceeds the configured limit of {max_bytes} bytes",
+                    )
+                tmp_file.write(chunk)
+    except Exception:
+        with suppress(FileNotFoundError):
+            tmp_path.unlink()
+        raise
+    if total_bytes == 0:
+        with suppress(FileNotFoundError):
+            tmp_path.unlink()
+        raise HTTPException(status_code=400, detail="uploaded file is empty")
+    return tmp_path, total_bytes
 
 def _parse_metric_filters(metric: Optional[List[str]], metrics: Optional[str]) -> Optional[List[str]]:
     """Accept both repeated ``metric=`` and comma-separated ``metrics=`` query styles."""
@@ -497,6 +558,82 @@ def create_app(
             "observation": observation,
         }
 
+
+    @app.post("/v1/user-uploads/dylib", status_code=201)
+    async def api_upload_dylib_hla(
+        dataset_name: str = Form(..., description="Private dataset name to create or append to."),
+        ios_version: str = Form(..., description="Full firmware label or user-supplied iOS version label."),
+        target_mode: UserUploadTargetMode = Form(...),
+        conflict_mode: UserObservationConflictMode = Form("reject"),
+        library_name: Optional[str] = Form(default=None, description="Optional library basename override."),
+        file: UploadFile = File(...),
+        conn: Connection = Depends(get_conn),
+        current_user: CurrentUser = Depends(require_current_user),
+    ) -> Dict[str, Any]:
+        cleaned_dataset_name = dataset_name.strip()
+        cleaned_ios_version = ios_version.strip()
+        if not cleaned_dataset_name:
+            raise HTTPException(status_code=400, detail="dataset_name is required")
+        if cleaned_dataset_name == PUBLIC_BASELINE_DATASET_NAME:
+            raise HTTPException(status_code=400, detail="public-baseline is read-only; upload into a private dataset")
+        if not cleaned_ios_version:
+            raise HTTPException(status_code=400, detail="ios_version is required")
+
+        _validate_uploaded_filename(file.filename)
+        cleaned_library_name = _clean_uploaded_library_name(library_name, file.filename)
+        effective_conflict_mode = "reject" if target_mode == "new_private_dataset" else conflict_mode
+        tmp_path: Optional[Path] = None
+        byte_count = 0
+        analysis: Dict[str, Any] = {}
+        try:
+            tmp_path, byte_count = await _save_upload_to_temp(file, _max_upload_bytes())
+            analysis = analyze_uploaded_dylib(tmp_path)
+            observation = create_user_hla_upload_observation(
+                conn,
+                dataset_name=cleaned_dataset_name,
+                owner_user_id=current_user.user_id,
+                library_name=cleaned_library_name,
+                ios_version=cleaned_ios_version,
+                metrics=analysis["metrics"],
+                original_path=f"uploaded:{cleaned_library_name}",
+                target_mode=target_mode,
+                conflict_mode=effective_conflict_mode,
+            )
+        except UploadedDylibAnalysisError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ObservationConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except DatasetConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            if tmp_path is not None:
+                with suppress(FileNotFoundError):
+                    tmp_path.unlink()
+            await file.close()
+
+        return {
+            "operation": "saved_user_uploaded_hla",
+            "target_mode": target_mode,
+            "conflict_mode": effective_conflict_mode,
+            "dataset_name": cleaned_dataset_name,
+            "dataset_visibility": observation.get("dataset_visibility", "private"),
+            "dataset_source_type": observation.get("dataset_source_type", "user_uploaded_hla"),
+            "dataset_trust_level": observation.get("dataset_trust_level", "platform_extracted_hla"),
+            "library": cleaned_library_name,
+            "ios_version": cleaned_ios_version,
+            "uploaded_byte_count": byte_count,
+            "analysis_summary": {
+                "format": analysis.get("format"),
+                "architecture": analysis.get("architecture"),
+                "deployment_target": analysis.get("deployment_target"),
+            },
+            "metric_count": len(analysis.get("metrics", {})),
+            "metrics": analysis.get("metrics", {}),
+            "warning": USER_UPLOADED_HLA_WARNING,
+            "observation": observation,
+        }
     @app.delete("/v1/user-datasets/{dataset_name:path}")
     def api_delete_user_dataset(
         dataset_name: str,

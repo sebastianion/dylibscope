@@ -22,6 +22,8 @@ PUBLIC_DATASET_VISIBILITY = "public"
 
 USER_MANUAL_SOURCE_TYPE = "user_manual"
 USER_MANUAL_TRUST_LEVEL = "user_provided_unverified"
+USER_UPLOADED_HLA_SOURCE_TYPE = "user_uploaded_hla"
+PLATFORM_EXTRACTED_HLA_TRUST_LEVEL = "platform_extracted_hla"
 PUBLIC_BASELINE_CLONE_SOURCE_TYPE = "public_baseline_clone_with_user_manual"
 MIXED_VERIFIED_MANUAL_TRUST_LEVEL = "mixed_verified_and_user_provided"
 PRIVATE_DATASET_VISIBILITY = "private"
@@ -759,6 +761,89 @@ def create_user_manual_observation(
         return {}
     observation = observations[0]
     observation["manual_write_operation"] = write_operation
+    return observation
+
+
+def create_user_hla_upload_observation(
+    conn: Connection,
+    *,
+    dataset_name: str,
+    owner_user_id: str,
+    library_name: str,
+    ios_version: str,
+    metrics: Dict[str, Any],
+    original_path: Optional[str] = None,
+    target_mode: str,
+    conflict_mode: str = "reject",
+) -> Dict[str, Any]:
+    """Create one private observation from a platform-extracted uploaded .dylib HLA result."""
+    definitions = _metric_definition_map(conn)
+    if not definitions:
+        raise ValueError("metric definitions are not initialized")
+    unknown_metrics = sorted(name for name in metrics if name not in definitions)
+    if unknown_metrics:
+        raise ValueError(f"unknown metric(s): {', '.join(unknown_metrics)}")
+    unsupported_levels = sorted(name for name in metrics if definitions[name]["level"] != "high")
+    if unsupported_levels:
+        raise ValueError(f"uploaded HLA observations cannot include low-level metric(s): {', '.join(unsupported_levels)}")
+
+    cleaned_dataset_name = dataset_name.strip()
+    if not cleaned_dataset_name:
+        raise ValueError("dataset_name is required")
+
+    if target_mode == "new_private_dataset":
+        if _private_dataset_row_by_owner_and_name(conn, dataset_name=cleaned_dataset_name, owner_user_id=owner_user_id):
+            raise DatasetConflictError(
+                "a private dataset with this name already exists for your account; use append mode or choose another name"
+            )
+        if _public_name_is_reserved(conn, cleaned_dataset_name):
+            raise DatasetConflictError("dataset name is reserved by a public dataset")
+        dataset_id = _create_private_dataset(
+            conn,
+            dataset_name=cleaned_dataset_name,
+            owner_user_id=owner_user_id,
+            source=USER_UPLOADED_HLA_SOURCE_TYPE,
+            source_type=USER_UPLOADED_HLA_SOURCE_TYPE,
+            trust_level=PLATFORM_EXTRACTED_HLA_TRUST_LEVEL,
+        )
+    elif target_mode == "append_private_dataset":
+        dataset_id = ensure_existing_private_user_dataset(
+            conn,
+            dataset_name=cleaned_dataset_name,
+            owner_user_id=owner_user_id,
+        )
+    else:
+        raise ValueError("target_mode must be either 'new_private_dataset' or 'append_private_dataset'")
+
+    library_id = _get_or_create_library(conn, library_name)
+    ios_version_id = _get_or_create_ios_version(conn, ios_version)
+    observation_id, write_operation = _get_or_create_manual_observation(
+        conn,
+        dataset_id=dataset_id,
+        library_id=library_id,
+        ios_version_id=ios_version_id,
+        original_path=original_path,
+        has_hla_metrics=True,
+        has_lla_metrics=False,
+        conflict_mode=conflict_mode,
+    )
+    for metric_name, value in metrics.items():
+        value_type = definitions[metric_name]["value_type"]
+        storage_values = _storage_values_for_metric(metric_name, value_type, value)
+        _upsert_metric_value(conn, observation_id, metric_name, storage_values)
+    conn.commit()
+
+    observations = get_library_metrics(
+        conn,
+        library_name=library_name,
+        dataset_name=cleaned_dataset_name,
+        ios_version=ios_version,
+        owner_user_id=owner_user_id,
+    )
+    if not observations:
+        return {}
+    observation = observations[0]
+    observation["upload_write_operation"] = write_operation
     return observation
 
 
