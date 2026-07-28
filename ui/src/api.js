@@ -55,6 +55,19 @@ export async function apiPost(path, body = {}) {
   return payload;
 }
 
+export async function apiPostForm(path, formData) {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: formData,
+  });
+  const payload = await parsePayload(response);
+  if (!response.ok) {
+    throw new Error(payload.detail || `Request failed with status ${response.status}`);
+  }
+  return payload;
+}
+
 export async function apiDelete(path, params = {}) {
   const response = await fetch(buildUrl(path, params), {
     method: 'DELETE',

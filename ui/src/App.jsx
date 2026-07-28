@@ -11,7 +11,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { API_BASE_URL, apiDelete, apiGet, apiPost, setApiAuthToken } from './api.js';
+import { API_BASE_URL, apiDelete, apiGet, apiPost, apiPostForm, setApiAuthToken } from './api.js';
 import { authConfigured, ensureAnonymousSession, onAuthStateChange } from './auth.js';
 import { metricDictionary, scoreDictionary } from './metricDictionary.js';
 
@@ -45,6 +45,7 @@ const NAV_ITEMS = [
   { id: 'compare', label: 'Compare' },
   { id: 'summary', label: 'iOS Summary' },
   { id: 'manual', label: 'Manual Datasets' },
+  { id: 'upload', label: 'Upload Dylib' },
   { id: 'dashboards', label: 'Dashboards' },
   { id: 'methodology', label: 'Methodology' },
 ];
@@ -259,6 +260,7 @@ function datasetSourceDisplay(dataset) {
   const source = dataset?.source_type || 'public_baseline';
   if (source === 'public_baseline') return 'Verified baseline';
   if (source === 'user_manual') return 'Manual user dataset';
+  if (source === 'user_uploaded_hla') return 'Uploaded HLA extraction';
   if (source === 'public_baseline_clone_with_user_manual') return 'Baseline clone + manual additions';
   return source.replaceAll('_', ' ');
 }
@@ -267,6 +269,7 @@ function datasetTrustDisplay(dataset) {
   const trust = dataset?.trust_level || dataset?.trust || '';
   if (trust === 'verified_pipeline_output') return 'Verified pipeline output';
   if (trust === 'user_provided_unverified') return 'User-provided, unverified';
+  if (trust === 'platform_extracted_hla') return 'Platform-extracted HLA';
   if (trust === 'mixed_verified_and_user_provided') return 'Mixed verified + user-provided';
   return trust ? trust.replaceAll('_', ' ') : 'Unknown trust';
 }
@@ -275,6 +278,7 @@ function datasetShortTrustDisplay(dataset) {
   const trust = dataset?.trust_level || dataset?.trust || '';
   if (trust === 'verified_pipeline_output') return 'Verified baseline';
   if (trust === 'user_provided_unverified') return 'User-provided';
+  if (trust === 'platform_extracted_hla') return 'Uploaded HLA';
   if (trust === 'mixed_verified_and_user_provided') return 'Mixed baseline/manual';
   return trust ? trust.replaceAll('_', ' ') : 'Unknown trust';
 }
@@ -288,8 +292,10 @@ function isUserProvidedDataset(datasetName, datasets) {
   const dataset = datasets.find((item) => item.name === datasetName);
   return (
     dataset?.source_type === 'user_manual' ||
+    dataset?.source_type === 'user_uploaded_hla' ||
     dataset?.source_type === 'public_baseline_clone_with_user_manual' ||
     dataset?.trust_level === 'user_provided_unverified' ||
+    dataset?.trust_level === 'platform_extracted_hla' ||
     dataset?.trust_level === 'mixed_verified_and_user_provided'
   );
 }
@@ -1384,6 +1390,243 @@ function UserObservationManager({ authState, datasets, selectedDataset, refreshK
   );
 }
 
+
+function uploadMetricRows(result) {
+  const metrics = result?.metrics || result?.extracted_metrics || result?.observation?.metrics || {};
+  return Object.entries(metrics)
+    .map(([name, payload]) => ({
+      name,
+      value: payload && typeof payload === 'object' && !Array.isArray(payload) && 'value' in payload
+        ? payload.value
+        : payload,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+}
+
+function DylibUploadForm({ authState, datasets, selectedDataset, onUploadComplete, onOpenLibrary }) {
+  const privateDatasets = useMemo(() => privateDatasetOptions(datasets), [datasets]);
+  const [form, setForm] = useState(() => ({
+    targetMode: 'new_private_dataset',
+    datasetName: 'uploaded-hla-dataset',
+    existingDatasetName: '',
+    iosVersion: 'iPhone11,8_12.0_16A366',
+    libraryName: '',
+    conflictMode: 'reject',
+  }));
+  const [file, setFile] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [result, setResult] = useState(null);
+
+  useEffect(() => {
+    if (!privateDatasets.length) return;
+    setForm((current) => {
+      if (current.existingDatasetName && privateDatasets.some((dataset) => dataset.name === current.existingDatasetName)) {
+        return current;
+      }
+      const preferred = privateDatasets.find((dataset) => dataset.name === selectedDataset) || privateDatasets[0];
+      return { ...current, existingDatasetName: preferred.name };
+    });
+  }, [privateDatasets, selectedDataset]);
+
+  function updateForm(key, value) {
+    setForm((current) => {
+      if (key === 'targetMode' && value === 'new_private_dataset') {
+        return { ...current, targetMode: value, conflictMode: 'reject' };
+      }
+      return { ...current, [key]: value };
+    });
+  }
+
+  function validateUpload() {
+    const errors = [];
+    if (!authState.configured) {
+      errors.push('Supabase Auth is not configured for this UI deployment.');
+    } else if (!authState.authenticated) {
+      errors.push('An authenticated session is required to upload dylibs.');
+    }
+    if (!file) {
+      errors.push('Choose a .dylib file to upload.');
+    } else if (!file.name.toLowerCase().endsWith('.dylib')) {
+      errors.push('The uploaded file name must end in .dylib.');
+    }
+    if (!form.iosVersion.trim()) {
+      errors.push('iOS version label is required.');
+    }
+    if (form.libraryName.trim() && !form.libraryName.trim().toLowerCase().endsWith('.dylib')) {
+      errors.push('Library name override must end in .dylib.');
+    }
+    if (form.targetMode === 'new_private_dataset') {
+      const targetName = form.datasetName.trim();
+      if (!targetName) {
+        errors.push('New private dataset name is required.');
+      } else if (targetName === DEFAULT_DATASET) {
+        errors.push('public-baseline cannot be modified directly. Choose a private dataset name.');
+      } else if (datasets.some((dataset) => dataset.name === targetName)) {
+        errors.push('A dataset with this name already exists. Choose append mode or use a new name.');
+      }
+    } else if (form.targetMode === 'append_private_dataset') {
+      const selected = privateDatasets.find((dataset) => dataset.name === form.existingDatasetName);
+      if (!selected) {
+        errors.push('Choose an existing private dataset to append to.');
+      }
+    } else {
+      errors.push('Choose a valid dataset target mode.');
+    }
+    return errors;
+  }
+
+  async function submitUpload() {
+    setError('');
+    setResult(null);
+    const errors = validateUpload();
+    if (errors.length) {
+      setError(errors.join(' '));
+      return;
+    }
+
+    const targetDatasetName = form.targetMode === 'new_private_dataset'
+      ? form.datasetName.trim()
+      : form.existingDatasetName.trim();
+    const body = new FormData();
+    body.append('dataset_name', targetDatasetName);
+    body.append('ios_version', form.iosVersion.trim());
+    body.append('target_mode', form.targetMode);
+    body.append('conflict_mode', form.targetMode === 'new_private_dataset' ? 'reject' : form.conflictMode);
+    if (form.libraryName.trim()) {
+      body.append('library_name', form.libraryName.trim());
+    }
+    body.append('file', file);
+
+    setLoading(true);
+    try {
+      const response = await apiPostForm('/v1/user-uploads/dylib', body);
+      setResult(response);
+      onUploadComplete?.(response.dataset_name || targetDatasetName);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const disabledReason = !authState.configured
+    ? 'Supabase Auth is not configured for this UI deployment.'
+    : !authState.authenticated
+      ? 'An authenticated session is required to upload dylibs.'
+      : '';
+  const metricRows = uploadMetricRows(result);
+  const resultDataset = result?.dataset_name || result?.dataset || '';
+  const resultLibrary = result?.library || result?.library_name || form.libraryName || file?.name || '';
+  const resultIosVersion = result?.ios_version || result?.version_label || form.iosVersion;
+  const resultSource = result?.dataset_source_type || result?.source_type || 'user_uploaded_hla';
+  const resultTrust = result?.dataset_trust_level || result?.trust_level || 'platform_extracted_hla';
+
+  return (
+    <Card title="Upload dylib for HLA extraction">
+      <p className="note">
+        Upload one iOS dynamic library and let DylibScope extract high-level Mach-O metrics with the backend pipeline.
+        Uploaded binaries are processed temporarily: the raw .dylib file is not stored after analysis; only extracted high-level static metrics are saved.
+      </p>
+
+      <div className="manualTargetBox uploadTargetBox">
+        <label>
+          Dataset target
+          <select value={form.targetMode} onChange={(event) => updateForm('targetMode', event.target.value)}>
+            <option value="new_private_dataset">Create a new private upload dataset</option>
+            <option value="append_private_dataset">Append to an existing private dataset</option>
+          </select>
+        </label>
+        {form.targetMode === 'new_private_dataset' ? (
+          <label>
+            New private dataset name
+            <input value={form.datasetName} onChange={(event) => updateForm('datasetName', event.target.value)} placeholder="uploaded-hla-dataset" />
+          </label>
+        ) : null}
+        {form.targetMode === 'append_private_dataset' ? (
+          <label>
+            Existing private dataset
+            <select value={form.existingDatasetName} onChange={(event) => updateForm('existingDatasetName', event.target.value)} disabled={!privateDatasets.length}>
+              {privateDatasets.length ? privateDatasets.map((dataset) => (
+                <option key={dataset.name} value={dataset.name}>{datasetLabel(dataset)}</option>
+              )) : <option value="">No private datasets available</option>}
+            </select>
+          </label>
+        ) : null}
+        {form.targetMode !== 'new_private_dataset' ? (
+          <>
+            <label>
+              Duplicate library/iOS behavior
+              <select value={form.conflictMode} onChange={(event) => updateForm('conflictMode', event.target.value)}>
+                <option value="reject">Reject if this library/iOS entry already exists</option>
+                <option value="replace">Replace existing observation explicitly</option>
+              </select>
+            </label>
+            <p className="schemaHint">
+              {form.conflictMode === 'replace'
+                ? 'Submitting with replace mode will overwrite the stored HLA metrics for the same dataset, library, and iOS version.'
+                : 'Default reject mode prevents silent overwrites. If the same library and iOS version already exist, the request will be rejected.'}
+            </p>
+          </>
+        ) : null}
+      </div>
+
+      <div className="manualFormGrid uploadFormGrid">
+        <label>
+          .dylib file
+          <input type="file" accept=".dylib" onChange={(event) => setFile(event.target.files?.[0] || null)} />
+        </label>
+        <label>
+          iOS version label
+          <input value={form.iosVersion} onChange={(event) => updateForm('iosVersion', event.target.value)} placeholder="iPhone11,8_12.0_16A366" />
+        </label>
+        <label>
+          Library name override
+          <input value={form.libraryName} onChange={(event) => updateForm('libraryName', event.target.value)} placeholder={file?.name || 'optional'} />
+        </label>
+      </div>
+      <p className="note">
+        The MVP runs high-level analysis only. Ghidra/LLA processing and permanent binary storage are intentionally out of scope for this phase.
+      </p>
+      {disabledReason ? <p className="warningNote">{disabledReason}</p> : null}
+      <LoadingButton loading={loading} disabled={Boolean(disabledReason)} onClick={submitUpload}>Upload and extract HLA metrics</LoadingButton>
+      <ErrorBox error={error} />
+      {result ? (
+        <div className="successBox uploadResultBox">
+          <strong>Upload processed successfully.</strong>
+          <div className="contextStrip">
+            <span>Dataset: <strong>{resultDataset}</strong></span>
+            <span>Library: <strong>{resultLibrary}</strong></span>
+            <span>iOS version: <strong>{resultIosVersion}</strong></span>
+            <span>Source: <strong>{datasetSourceDisplay({ source_type: resultSource })}</strong></span>
+            <span>Trust: <strong>{datasetTrustDisplay({ trust_level: resultTrust })}</strong></span>
+          </div>
+          {metricRows.length ? (
+            <div className="tableWrap uploadMetricTable">
+              <table>
+                <thead>
+                  <tr><th>Metric</th><th>Value</th></tr>
+                </thead>
+                <tbody>
+                  {metricRows.map((row) => (
+                    <tr key={row.name}>
+                      <td><code>{row.name}</code></td>
+                      <td><MetricValue value={row.value} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : <p className="muted">No metrics were returned in the response payload.</p>}
+          <button type="button" className="secondaryButton" onClick={() => onOpenLibrary?.(resultDataset)}>
+            Open in Library Explorer
+          </button>
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
 function PublishedDashboards() {
   return (
     <Card title="Published Plotly dashboards">
@@ -2329,6 +2572,29 @@ export default function App() {
                 }
                 setDatasetRefreshKey((value) => value + 1);
                 setObservationRefreshKey((value) => value + 1);
+              }}
+            />
+          </>
+        ) : null}
+
+        {activePage === 'upload' ? (
+          <>
+            <PageIntro eyebrow="Platform-extracted private data" title="Upload Dylib">
+              Upload one .dylib file, run high-level LIEF-style extraction on the API, and save the extracted metrics into a private dataset.
+            </PageIntro>
+            <DylibUploadForm
+              authState={authState}
+              datasets={datasets}
+              selectedDataset={selectedDataset}
+              onUploadComplete={(datasetName) => {
+                setSelectedDataset(datasetName);
+                setDatasetRefreshKey((value) => value + 1);
+                setObservationRefreshKey((value) => value + 1);
+              }}
+              onOpenLibrary={(datasetName) => {
+                setSelectedDataset(datasetName || selectedDataset);
+                setDatasetRefreshKey((value) => value + 1);
+                setActivePage('library');
               }}
             />
           </>

@@ -1000,3 +1000,31 @@ code {
 .observationDetail {
   margin-top: 0;
 }
+
+.uploadTargetBox {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.uploadFormGrid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.uploadResultBox {
+  display: grid;
+  gap: 12px;
+}
+
+.uploadResultBox .contextStrip {
+  margin-top: 0;
+}
+
+.uploadMetricTable {
+  margin-top: 4px;
+}
+
+@media (max-width: 900px) {
+  .uploadTargetBox,
+  .uploadFormGrid {
+    grid-template-columns: 1fr;
+  }
+}
