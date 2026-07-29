@@ -1661,6 +1661,7 @@ function DylibZipUploadForm({ authState, datasets, selectedDataset, onUploadComp
         const response = await apiGet(`/v1/user-uploads/jobs/${job.id}`);
         if (!cancelled) {
           setJob(response);
+          setError('');
           if (response.dataset_name) {
             onUploadComplete?.(response.dataset_name);
           }

@@ -182,6 +182,32 @@ def _extract_member(zip_path: Path, member_name: str, target_path: Path) -> int:
     return total_bytes
 
 
+def _update_item_status(
+    *,
+    database_url: str,
+    job_id: str,
+    owner_user_id: str,
+    item_id: str,
+    status: str,
+    error_message=None,
+    observation_id=None,
+    refresh_counts: bool = False,
+) -> None:
+    conn = connect(database_url)
+    try:
+        update_upload_job_item_status(
+            conn,
+            item_id=item_id,
+            status=status,
+            error_message=error_message,
+            observation_id=observation_id,
+        )
+        if refresh_counts:
+            refresh_upload_job_counts(conn, job_id=job_id, owner_user_id=owner_user_id)
+    finally:
+        conn.close()
+
+
 def _process_one_job_item(
     *,
     database_url: str,
@@ -195,49 +221,73 @@ def _process_one_job_item(
     item: dict[str, Any],
 ) -> None:
     tmp_path = workspace / f"{item['id']}.dylib"
-    conn = connect(database_url)
     try:
-        update_upload_job_item_status(conn, item_id=item["id"], status="running")
+        _update_item_status(
+            database_url=database_url,
+            job_id=job_id,
+            owner_user_id=owner_user_id,
+            item_id=item["id"],
+            status="running",
+        )
+
+        # File extraction and LIEF parsing can be slow. Do not hold a database connection here.
         _extract_member(zip_path, item["filename"], tmp_path)
         analysis = analyze_uploaded_dylib(tmp_path)
-        observation = create_user_hla_upload_observation(
-            conn,
-            dataset_name=dataset_name,
-            owner_user_id=owner_user_id,
-            library_name=item["library_name"],
-            ios_version=ios_version,
-            metrics=analysis["metrics"],
-            original_path=f"uploaded_zip:{item['filename']}",
-            target_mode="append_private_dataset",
-            conflict_mode=conflict_mode,
-        )
-        observation_id = observation.get("observation_id") if isinstance(observation, dict) else None
-        update_upload_job_item_status(
-            conn,
-            item_id=item["id"],
-            status="processed",
-            observation_id=observation_id,
-        )
+
+        conn = connect(database_url)
+        try:
+            observation = create_user_hla_upload_observation(
+                conn,
+                dataset_name=dataset_name,
+                owner_user_id=owner_user_id,
+                library_name=item["library_name"],
+                ios_version=ios_version,
+                metrics=analysis["metrics"],
+                original_path=f"uploaded_zip:{item['filename']}",
+                target_mode="append_private_dataset",
+                conflict_mode=conflict_mode,
+            )
+            observation_id = observation.get("observation_id") if isinstance(observation, dict) else None
+            update_upload_job_item_status(
+                conn,
+                item_id=item["id"],
+                status="processed",
+                observation_id=observation_id,
+            )
+            refresh_upload_job_counts(conn, job_id=job_id, owner_user_id=owner_user_id)
+        finally:
+            conn.close()
     except (
         UploadedDylibAnalysisError,
+        ZipUploadValidationError,
         ObservationConflictError,
         DatasetConflictError,
         ValueError,
         zipfile.BadZipFile,
     ) as exc:
-        update_upload_job_item_status(conn, item_id=item["id"], status="failed", error_message=str(exc))
-    except Exception as exc:  # noqa: BLE001 - batch jobs should record per-file failures instead of crashing silently.
-        update_upload_job_item_status(
-            conn,
+        _update_item_status(
+            database_url=database_url,
+            job_id=job_id,
+            owner_user_id=owner_user_id,
+            item_id=item["id"],
+            status="failed",
+            error_message=str(exc),
+            refresh_counts=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Batch jobs should record per-file failures instead of crashing silently.
+        _update_item_status(
+            database_url=database_url,
+            job_id=job_id,
+            owner_user_id=owner_user_id,
             item_id=item["id"],
             status="failed",
             error_message=f"unexpected error: {exc}",
+            refresh_counts=True,
         )
     finally:
         with suppress(FileNotFoundError):
             tmp_path.unlink()
-        refresh_upload_job_counts(conn, job_id=job_id, owner_user_id=owner_user_id)
-        conn.close()
 
 
 def process_dylib_zip_upload_job(*, database_url: str, job_id: str, owner_user_id: str, zip_path: str) -> None:
