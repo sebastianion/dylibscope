@@ -6,7 +6,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any, Dict, Iterable, Iterator, List, Literal, Optional, Tuple, Union
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import text
@@ -17,6 +17,12 @@ from sqlalchemy.exc import SQLAlchemyError
 from dylibscope.api.auth import CurrentUser, get_optional_current_user, require_current_user
 from dylibscope.api.config import resolve_database_url
 from dylibscope.high_level_analysis.upload_hla import UploadedDylibAnalysisError, analyze_uploaded_dylib
+from dylibscope.api.zip_uploads import (
+    ZipUploadValidationError,
+    create_dylib_zip_upload_job,
+    max_zip_upload_bytes,
+    process_dylib_zip_upload_job,
+)
 from dylibscope.security_analysis.derived_scoring import (
     INTERPRETATION_NOTE,
     METRIC_WEIGHTS,
@@ -40,6 +46,7 @@ from dylibscope.storage.repository import (
     list_libraries,
     list_observations_for_ios_version,
     list_user_observations,
+    get_upload_job,
 )
 from dylibscope.storage.schema import connect
 
@@ -634,6 +641,82 @@ def create_app(
             "warning": USER_UPLOADED_HLA_WARNING,
             "observation": observation,
         }
+
+
+    @app.post("/v1/user-uploads/dylib-zip", status_code=202)
+    async def api_upload_dylib_zip_hla(
+        background_tasks: BackgroundTasks,
+        dataset_name: str = Form(..., description="Private dataset name to create or append to."),
+        ios_version: str = Form(..., description="Full firmware label or user-supplied iOS version label."),
+        target_mode: UserUploadTargetMode = Form(...),
+        conflict_mode: UserObservationConflictMode = Form("reject"),
+        file: UploadFile = File(...),
+        conn: Connection = Depends(get_conn),
+        current_user: CurrentUser = Depends(require_current_user),
+    ) -> Dict[str, Any]:
+        cleaned_dataset_name = dataset_name.strip()
+        cleaned_ios_version = ios_version.strip()
+        if not cleaned_dataset_name:
+            raise HTTPException(status_code=400, detail="dataset_name is required")
+        if cleaned_dataset_name == PUBLIC_BASELINE_DATASET_NAME:
+            raise HTTPException(status_code=400, detail="public-baseline is read-only; upload into a private dataset")
+        if not cleaned_ios_version:
+            raise HTTPException(status_code=400, detail="ios_version is required")
+        if not Path(file.filename or "").name.lower().endswith(".zip"):
+            raise HTTPException(status_code=400, detail="upload must be a .zip archive")
+        effective_conflict_mode = "reject" if target_mode == "new_private_dataset" else conflict_mode
+        tmp_path: Optional[Path] = None
+        try:
+            tmp_path, byte_count = await _save_upload_to_temp(file, max_zip_upload_bytes())
+            job = create_dylib_zip_upload_job(
+                conn,
+                owner_user_id=current_user.user_id,
+                dataset_name=cleaned_dataset_name,
+                ios_version=cleaned_ios_version,
+                target_mode=target_mode,
+                conflict_mode=effective_conflict_mode,
+                zip_filename=Path(file.filename or "uploaded.zip").name,
+                zip_byte_count=byte_count,
+                zip_path=tmp_path,
+            )
+        except ZipUploadValidationError as exc:
+            if tmp_path is not None:
+                with suppress(FileNotFoundError):
+                    tmp_path.unlink()
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except DatasetConflictError as exc:
+            if tmp_path is not None:
+                with suppress(FileNotFoundError):
+                    tmp_path.unlink()
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            if tmp_path is not None:
+                with suppress(FileNotFoundError):
+                    tmp_path.unlink()
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            await file.close()
+        background_tasks.add_task(
+            process_dylib_zip_upload_job,
+            database_url=resolved_database_url,
+            job_id=job["id"],
+            owner_user_id=current_user.user_id,
+            zip_path=str(tmp_path),
+        )
+        job["operation"] = "created_user_uploaded_hla_zip_job"
+        job["warning"] = USER_UPLOADED_HLA_WARNING
+        return job
+
+    @app.get("/v1/user-uploads/jobs/{job_id}")
+    def api_get_upload_job(
+        job_id: str,
+        conn: Connection = Depends(get_conn),
+        current_user: CurrentUser = Depends(require_current_user),
+    ) -> Dict[str, Any]:
+        try:
+            return get_upload_job(conn, job_id=job_id, owner_user_id=current_user.user_id)
+        except DatasetNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
     @app.delete("/v1/user-datasets/{dataset_name:path}")
     def api_delete_user_dataset(
         dataset_name: str,

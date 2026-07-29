@@ -15,6 +15,8 @@ from dylibscope.storage.schema import (
     library_observations,
     metric_definitions,
     metric_values,
+    upload_job_items,
+    upload_jobs,
 )
 
 
@@ -253,6 +255,43 @@ def ensure_existing_private_user_dataset(conn: Connection, dataset_name: str, ow
         raise ValueError("private target dataset was not found for the current user")
     return int(row["id"])
 
+
+
+def prepare_user_hla_upload_dataset(
+    conn: Connection,
+    *,
+    dataset_name: str,
+    owner_user_id: str,
+    target_mode: str,
+) -> int:
+    """Create or resolve the private dataset used by a batch uploaded-HLA job."""
+    cleaned_dataset_name = dataset_name.strip()
+    if not cleaned_dataset_name:
+        raise ValueError("dataset_name is required")
+    if target_mode == "new_private_dataset":
+        if _private_dataset_row_by_owner_and_name(conn, dataset_name=cleaned_dataset_name, owner_user_id=owner_user_id):
+            raise DatasetConflictError(
+                "a private dataset with this name already exists for your account; use append mode or choose another name"
+            )
+        if _public_name_is_reserved(conn, cleaned_dataset_name):
+            raise DatasetConflictError("dataset name is reserved by a public dataset")
+        dataset_id = _create_private_dataset(
+            conn,
+            dataset_name=cleaned_dataset_name,
+            owner_user_id=owner_user_id,
+            source=USER_UPLOADED_HLA_SOURCE_TYPE,
+            source_type=USER_UPLOADED_HLA_SOURCE_TYPE,
+            trust_level=PLATFORM_EXTRACTED_HLA_TRUST_LEVEL,
+        )
+        conn.commit()
+        return dataset_id
+    if target_mode == "append_private_dataset":
+        return ensure_existing_private_user_dataset(
+            conn,
+            dataset_name=cleaned_dataset_name,
+            owner_user_id=owner_user_id,
+        )
+    raise ValueError("target_mode must be either 'new_private_dataset' or 'append_private_dataset'")
 
 def clone_public_dataset_for_user(
     conn: Connection,
@@ -846,6 +885,187 @@ def create_user_hla_upload_observation(
     observation["upload_write_operation"] = write_operation
     return observation
 
+
+
+def create_upload_job(
+    conn: Connection,
+    *,
+    job_id: str,
+    owner_user_id: str,
+    dataset_name: str,
+    ios_version: str,
+    target_mode: str,
+    conflict_mode: str,
+    zip_filename: str,
+    zip_byte_count: int,
+    total_files: int,
+    ignored_count: int,
+) -> Dict[str, Any]:
+    conn.execute(
+        upload_jobs.insert().values(
+            id=job_id,
+            owner_user_id=owner_user_id,
+            dataset_name=dataset_name,
+            ios_version=ios_version,
+            target_mode=target_mode,
+            conflict_mode=conflict_mode,
+            status="queued",
+            zip_filename=zip_filename,
+            zip_byte_count=zip_byte_count,
+            total_files=total_files,
+            processed_count=0,
+            failed_count=0,
+            ignored_count=ignored_count,
+        )
+    )
+    conn.commit()
+    return get_upload_job(conn, job_id=job_id, owner_user_id=owner_user_id)
+
+
+def create_upload_job_item(
+    conn: Connection,
+    *,
+    item_id: str,
+    job_id: str,
+    filename: str,
+    library_name: str,
+) -> None:
+    conn.execute(
+        upload_job_items.insert().values(
+            id=item_id,
+            job_id=job_id,
+            filename=filename,
+            library_name=library_name,
+            status="queued",
+        )
+    )
+
+
+def update_upload_job_status(
+    conn: Connection,
+    *,
+    job_id: str,
+    owner_user_id: str,
+    status: str,
+    error_message: Optional[str] = None,
+) -> None:
+    completed_sql = ", completed_at = CURRENT_TIMESTAMP" if status in {"completed", "failed"} else ""
+    conn.execute(
+        text(
+            f"""
+            UPDATE upload_jobs
+            SET status = :status,
+                error_message = :error_message,
+                updated_at = CURRENT_TIMESTAMP
+                {completed_sql}
+            WHERE id = :job_id AND owner_user_id = :owner_user_id
+            """
+        ),
+        {
+            "job_id": job_id,
+            "owner_user_id": owner_user_id,
+            "status": status,
+            "error_message": error_message,
+        },
+    )
+    conn.commit()
+
+
+def update_upload_job_item_status(
+    conn: Connection,
+    *,
+    item_id: str,
+    status: str,
+    error_message: Optional[str] = None,
+    observation_id: Optional[int] = None,
+) -> None:
+    completed_sql = ", completed_at = CURRENT_TIMESTAMP" if status in {"processed", "failed"} else ""
+    conn.execute(
+        text(
+            f"""
+            UPDATE upload_job_items
+            SET status = :status,
+                error_message = :error_message,
+                observation_id = :observation_id,
+                updated_at = CURRENT_TIMESTAMP
+                {completed_sql}
+            WHERE id = :item_id
+            """
+        ),
+        {
+            "item_id": item_id,
+            "status": status,
+            "error_message": error_message,
+            "observation_id": observation_id,
+        },
+    )
+    conn.commit()
+
+
+def refresh_upload_job_counts(conn: Connection, *, job_id: str, owner_user_id: str) -> None:
+    conn.execute(
+        text(
+            """
+            UPDATE upload_jobs
+            SET processed_count = (
+                    SELECT COUNT(*) FROM upload_job_items WHERE job_id = :job_id AND status = 'processed'
+                ),
+                failed_count = (
+                    SELECT COUNT(*) FROM upload_job_items WHERE job_id = :job_id AND status = 'failed'
+                ),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = :job_id AND owner_user_id = :owner_user_id
+            """
+        ),
+        {"job_id": job_id, "owner_user_id": owner_user_id},
+    )
+    conn.commit()
+
+
+def get_upload_job(conn: Connection, *, job_id: str, owner_user_id: str) -> Dict[str, Any]:
+    job = (
+        conn.execute(
+            text(
+                """
+                SELECT *
+                FROM upload_jobs
+                WHERE id = :job_id AND owner_user_id = :owner_user_id
+                """
+            ),
+            {"job_id": job_id, "owner_user_id": owner_user_id},
+        )
+        .mappings()
+        .first()
+    )
+    if not job:
+        raise DatasetNotFoundError("upload job was not found for the current user")
+    items = (
+        conn.execute(
+            text(
+                """
+                SELECT *
+                FROM upload_job_items
+                WHERE job_id = :job_id
+                ORDER BY filename
+                """
+            ),
+            {"job_id": job_id},
+        )
+        .mappings()
+        .fetchall()
+    )
+    job_payload = _as_dict(job)
+    total_files = int(job_payload.get("total_files") or 0)
+    processed_count = int(job_payload.get("processed_count") or 0)
+    failed_count = int(job_payload.get("failed_count") or 0)
+    completed_count = processed_count + failed_count
+    job_payload["progress_percent"] = round((completed_count / total_files) * 100, 2) if total_files else 0
+    item_payloads = [_as_dict(item) for item in items]
+    job_payload["items"] = item_payloads
+    job_payload["results"] = [item for item in item_payloads if item.get("status") == "processed"]
+    job_payload["failures"] = [item for item in item_payloads if item.get("status") == "failed"]
+    job_payload["pending_count"] = max(total_files - completed_count, 0)
+    return job_payload
 
 def _as_dict(row: RowMapping) -> Dict[str, Any]:
     return dict(row)

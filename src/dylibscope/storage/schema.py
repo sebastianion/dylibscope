@@ -24,7 +24,7 @@ from sqlalchemy import (
 from sqlalchemy.engine import Connection, Engine, make_url
 from sqlalchemy.exc import IntegrityError
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 DEFAULT_SQLITE_PATH = Path("data/dylibscope.sqlite")
 
 metadata = MetaData()
@@ -120,6 +120,45 @@ import_errors = Table(
     Column("created_at", String, nullable=False, server_default=func.current_timestamp()),
 )
 
+
+
+upload_jobs = Table(
+    "upload_jobs",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("owner_user_id", String, nullable=False),
+    Column("dataset_name", String, nullable=False),
+    Column("ios_version", String, nullable=False),
+    Column("target_mode", String, nullable=False),
+    Column("conflict_mode", String, nullable=False),
+    Column("status", String, nullable=False, server_default="queued"),
+    Column("zip_filename", Text),
+    Column("zip_byte_count", Integer, nullable=False, server_default="0"),
+    Column("total_files", Integer, nullable=False, server_default="0"),
+    Column("processed_count", Integer, nullable=False, server_default="0"),
+    Column("failed_count", Integer, nullable=False, server_default="0"),
+    Column("ignored_count", Integer, nullable=False, server_default="0"),
+    Column("error_message", Text),
+    Column("created_at", String, nullable=False, server_default=func.current_timestamp()),
+    Column("updated_at", String, nullable=False, server_default=func.current_timestamp()),
+    Column("completed_at", String),
+)
+
+upload_job_items = Table(
+    "upload_job_items",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("job_id", String, ForeignKey("upload_jobs.id", ondelete="CASCADE"), nullable=False),
+    Column("filename", Text, nullable=False),
+    Column("library_name", String, nullable=False),
+    Column("status", String, nullable=False, server_default="queued"),
+    Column("error_message", Text),
+    Column("observation_id", Integer),
+    Column("created_at", String, nullable=False, server_default=func.current_timestamp()),
+    Column("updated_at", String, nullable=False, server_default=func.current_timestamp()),
+    Column("completed_at", String),
+    UniqueConstraint("job_id", "filename", name="uq_upload_job_item_filename"),
+)
 METRIC_DEFINITIONS = [
     ("deployment_target", "high", "text", "Minimum deployment target extracted from Mach-O load commands."),
     ("num_sections", "high", "numeric", "Number of Mach-O sections."),

@@ -1627,6 +1627,257 @@ function DylibUploadForm({ authState, datasets, selectedDataset, onUploadComplet
   );
 }
 
+
+function DylibZipUploadForm({ authState, datasets, selectedDataset, onUploadComplete, onOpenLibrary }) {
+  const privateDatasets = useMemo(() => privateDatasetOptions(datasets), [datasets]);
+  const [form, setForm] = useState(() => ({
+    targetMode: 'new_private_dataset',
+    datasetName: 'uploaded-zip-hla-dataset',
+    existingDatasetName: '',
+    iosVersion: 'iPhone11,8_12.0_16A366',
+    conflictMode: 'reject',
+  }));
+  const [zipFile, setZipFile] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [job, setJob] = useState(null);
+  useEffect(() => {
+    if (!privateDatasets.length) return;
+    setForm((current) => {
+      if (current.existingDatasetName && privateDatasets.some((dataset) => dataset.name === current.existingDatasetName)) {
+        return current;
+      }
+      const preferred = privateDatasets.find((dataset) => dataset.name === selectedDataset) || privateDatasets[0];
+      return { ...current, existingDatasetName: preferred.name };
+    });
+  }, [privateDatasets, selectedDataset]);
+  useEffect(() => {
+    if (!job?.id || !['queued', 'running'].includes(job.status)) {
+      return undefined;
+    }
+    let cancelled = false;
+    const pollJob = async () => {
+      try {
+        const response = await apiGet(`/v1/user-uploads/jobs/${job.id}`);
+        if (!cancelled) {
+          setJob(response);
+          if (response.dataset_name) {
+            onUploadComplete?.(response.dataset_name);
+          }
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err.message);
+        }
+      }
+    };
+    const timer = window.setInterval(pollJob, 2500);
+    pollJob();
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [job?.id, job?.status, onUploadComplete]);
+  function updateForm(key, value) {
+    setForm((current) => {
+      if (key === 'targetMode' && value === 'new_private_dataset') {
+        return { ...current, targetMode: value, conflictMode: 'reject' };
+      }
+      return { ...current, [key]: value };
+    });
+  }
+  function validateUpload() {
+    const errors = [];
+    if (!authState.configured) {
+      errors.push('Supabase Auth is not configured for this UI deployment.');
+    } else if (!authState.authenticated) {
+      errors.push('An authenticated session is required to upload zip batches.');
+    }
+    if (!zipFile) {
+      errors.push('Choose a .zip archive to upload.');
+    } else if (!zipFile.name.toLowerCase().endsWith('.zip')) {
+      errors.push('The uploaded file name must end in .zip.');
+    }
+    if (!form.iosVersion.trim()) {
+      errors.push('iOS version label is required.');
+    }
+    if (form.targetMode === 'new_private_dataset') {
+      const targetName = form.datasetName.trim();
+      if (!targetName) {
+        errors.push('New private dataset name is required.');
+      } else if (targetName === DEFAULT_DATASET) {
+        errors.push('public-baseline cannot be modified directly. Choose a private dataset name.');
+      } else if (datasets.some((dataset) => dataset.name === targetName)) {
+        errors.push('A dataset with this name already exists. Choose append mode or use a new name.');
+      }
+    } else if (form.targetMode === 'append_private_dataset') {
+      const selected = privateDatasets.find((dataset) => dataset.name === form.existingDatasetName);
+      if (!selected) {
+        errors.push('Choose an existing private dataset to append to.');
+      }
+    } else {
+      errors.push('Choose a valid dataset target mode.');
+    }
+    return errors;
+  }
+  async function submitZipUpload() {
+    setError('');
+    setJob(null);
+    const errors = validateUpload();
+    if (errors.length) {
+      setError(errors.join(' '));
+      return;
+    }
+    const targetDatasetName = form.targetMode === 'new_private_dataset'
+      ? form.datasetName.trim()
+      : form.existingDatasetName.trim();
+    const body = new FormData();
+    body.append('dataset_name', targetDatasetName);
+    body.append('ios_version', form.iosVersion.trim());
+    body.append('target_mode', form.targetMode);
+    body.append('conflict_mode', form.targetMode === 'new_private_dataset' ? 'reject' : form.conflictMode);
+    body.append('file', zipFile);
+    setLoading(true);
+    try {
+      const response = await apiPostForm('/v1/user-uploads/dylib-zip', body);
+      setJob(response);
+      onUploadComplete?.(response.dataset_name || targetDatasetName);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+  const disabledReason = !authState.configured
+    ? 'Supabase Auth is not configured for this UI deployment.'
+    : !authState.authenticated
+      ? 'An authenticated session is required to upload zip batches.'
+      : '';
+  const progress = Math.max(0, Math.min(Number(job?.progress_percent || 0), 100));
+  const completed = ['completed', 'completed_with_failures', 'failed'].includes(job?.status || '');
+  return (
+    <Card title="Upload zip batch for parallel HLA extraction">
+      <p className="note">
+        Upload one .zip archive containing .dylib files. The API validates the archive, creates a job,
+        processes files with bounded parallelism, and the UI polls for progress. Raw binaries are temporary;
+        only extracted high-level static metrics are saved.
+      </p>
+      <div className="manualTargetBox uploadTargetBox">
+        <label>
+          Dataset target
+          <select value={form.targetMode} onChange={(event) => updateForm('targetMode', event.target.value)}>
+            <option value="new_private_dataset">Create a new private upload dataset</option>
+            <option value="append_private_dataset">Append to an existing private dataset</option>
+          </select>
+        </label>
+        {form.targetMode === 'new_private_dataset' ? (
+          <label>
+            New private dataset name
+            <input value={form.datasetName} onChange={(event) => updateForm('datasetName', event.target.value)} placeholder="uploaded-zip-hla-dataset" />
+          </label>
+        ) : null}
+        {form.targetMode === 'append_private_dataset' ? (
+          <label>
+            Existing private dataset
+            <select value={form.existingDatasetName} onChange={(event) => updateForm('existingDatasetName', event.target.value)} disabled={!privateDatasets.length}>
+              {privateDatasets.length ? privateDatasets.map((dataset) => (
+                <option key={dataset.name} value={dataset.name}>{datasetLabel(dataset)}</option>
+              )) : <option value="">No private datasets available</option>}
+            </select>
+          </label>
+        ) : null}
+        {form.targetMode !== 'new_private_dataset' ? (
+          <>
+            <label>
+              Duplicate library/iOS behavior
+              <select value={form.conflictMode} onChange={(event) => updateForm('conflictMode', event.target.value)}>
+                <option value="reject">Reject if a library/iOS entry already exists</option>
+                <option value="replace">Replace existing observations explicitly</option>
+              </select>
+            </label>
+            <p className="schemaHint">
+              {form.conflictMode === 'replace'
+                ? 'Replace mode overwrites stored HLA metrics for matching dataset, library, and iOS version entries.'
+                : 'Default reject mode prevents silent overwrites. Existing library/iOS entries will be reported as failed job items.'}
+            </p>
+          </>
+        ) : null}
+      </div>
+      <div className="manualFormGrid uploadFormGrid">
+        <label>
+          .zip archive
+          <input type="file" accept=".zip,application/zip" onChange={(event) => setZipFile(event.target.files?.[0] || null)} />
+        </label>
+        <label>
+          iOS version label
+          <input value={form.iosVersion} onChange={(event) => updateForm('iosVersion', event.target.value)} placeholder="iPhone11,8_12.0_16A366" />
+        </label>
+      </div>
+      <p className="note">
+        Current defaults: up to 100 .dylib files per zip, 100 MB zip size, 300 MB total extracted .dylib size,
+        and bounded parallelism controlled by <code>DYLIBSCOPE_UPLOAD_PARALLELISM</code>.
+      </p>
+      {disabledReason ? <p className="warningNote">{disabledReason}</p> : null}
+      <LoadingButton loading={loading} disabled={Boolean(disabledReason)} onClick={submitZipUpload}>Create zip processing job</LoadingButton>
+      <ErrorBox error={error} />
+      {job ? (
+        <div className="successBox uploadResultBox">
+          <strong>Zip upload job {job.status || 'created'}.</strong>
+          <div className="contextStrip">
+            <span>Dataset: <strong>{job.dataset_name}</strong></span>
+            <span>iOS version: <strong>{job.ios_version}</strong></span>
+            <span>Total .dylib files: <strong>{job.total_files}</strong></span>
+            <span>Processed: <strong>{job.processed_count || 0}</strong></span>
+            <span>Failed: <strong>{job.failed_count || 0}</strong></span>
+            <span>Ignored: <strong>{job.ignored_count || 0}</strong></span>
+          </div>
+          <div className="jobProgressOuter" aria-label="Zip upload job progress">
+            <div className="jobProgressInner" style={{ width: `${progress}%` }} />
+          </div>
+          <p className="muted">Progress: {progress}%</p>
+          {job.results?.length ? (
+            <div className="tableWrap uploadMetricTable">
+              <table>
+                <thead>
+                  <tr><th>Processed library</th><th>Status</th></tr>
+                </thead>
+                <tbody>
+                  {job.results.slice(0, 12).map((item) => (
+                    <tr key={item.id}>
+                      <td><code>{item.library_name}</code></td>
+                      <td>{item.status}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+          {job.failures?.length ? (
+            <div className="tableWrap uploadMetricTable">
+              <table>
+                <thead>
+                  <tr><th>Failed file</th><th>Error</th></tr>
+                </thead>
+                <tbody>
+                  {job.failures.slice(0, 12).map((item) => (
+                    <tr key={item.id}>
+                      <td><code>{item.filename}</code></td>
+                      <td>{item.error_message || 'Failed'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+          <button type="button" className="secondaryButton" onClick={() => onOpenLibrary?.(job.dataset_name)} disabled={!completed && !(job.processed_count > 0)}>
+            Open dataset in Library Explorer
+          </button>
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
 function PublishedDashboards() {
   return (
     <Card title="Published Plotly dashboards">
@@ -2580,9 +2831,24 @@ export default function App() {
         {activePage === 'upload' ? (
           <>
             <PageIntro eyebrow="Platform-extracted private data" title="Upload Dylib">
-              Upload one .dylib file, run high-level LIEF-style extraction on the API, and save the extracted metrics into a private dataset.
+              Upload one .dylib file or a .zip batch, run high-level LIEF-style extraction on the API, and save extracted metrics into a private dataset.
             </PageIntro>
             <DylibUploadForm
+              authState={authState}
+              datasets={datasets}
+              selectedDataset={selectedDataset}
+              onUploadComplete={(datasetName) => {
+                setSelectedDataset(datasetName);
+                setDatasetRefreshKey((value) => value + 1);
+                setObservationRefreshKey((value) => value + 1);
+              }}
+              onOpenLibrary={(datasetName) => {
+                setSelectedDataset(datasetName || selectedDataset);
+                setDatasetRefreshKey((value) => value + 1);
+                setActivePage('library');
+              }}
+            />
+            <DylibZipUploadForm
               authState={authState}
               datasets={datasets}
               selectedDataset={selectedDataset}

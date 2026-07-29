@@ -1028,3 +1028,20 @@ code {
     grid-template-columns: 1fr;
   }
 }
+
+
+.jobProgressOuter {
+  width: 100%;
+  min-height: 12px;
+  border-radius: 999px;
+  background: #dcfce7;
+  overflow: hidden;
+  border: 1px solid #86efac;
+}
+
+.jobProgressInner {
+  min-height: 12px;
+  border-radius: 999px;
+  background: #16a34a;
+  transition: width 0.25s ease;
+}
