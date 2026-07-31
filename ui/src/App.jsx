@@ -45,7 +45,7 @@ const NAV_ITEMS = [
   { id: 'compare', label: 'Compare' },
   { id: 'summary', label: 'iOS Summary' },
   { id: 'manual', label: 'Manual Datasets' },
-  { id: 'upload', label: 'Upload Dylib' },
+  { id: 'upload', label: 'Upload Library Files' },
   { id: 'dashboards', label: 'Dashboards' },
   { id: 'methodology', label: 'Methodology' },
 ];
@@ -1757,11 +1757,12 @@ function DylibZipUploadForm({ authState, datasets, selectedDataset, onUploadComp
   const progress = Math.max(0, Math.min(Number(job?.progress_percent || 0), 100));
   const completed = ['completed', 'completed_with_failures', 'failed'].includes(job?.status || '');
   return (
-    <Card title="Upload zip batch for parallel HLA extraction">
+    <Card title="Upload .zip archive">
       <p className="note">
-        Upload one .zip archive containing .dylib files. The API validates the archive, creates a job,
-        processes files with bounded parallelism, and the UI polls for progress. Raw binaries are temporary;
-        only extracted high-level static metrics are saved.
+        Upload a .zip file containing one or more .dylib library files. DylibScope will extract high-level static metrics and save them to a private dataset.
+      </p>
+      <p className="note">
+        Uploaded binaries are processed temporarily. Only extracted metrics are saved.
       </p>
       <div className="manualTargetBox uploadTargetBox">
         <label>
@@ -1815,15 +1816,14 @@ function DylibZipUploadForm({ authState, datasets, selectedDataset, onUploadComp
         </label>
       </div>
       <p className="note">
-        Current defaults: up to 100 .dylib files per zip, 100 MB zip size, 300 MB total extracted .dylib size,
-        and bounded parallelism controlled by <code>DYLIBSCOPE_UPLOAD_PARALLELISM</code>.
+        Current upload limits: up to 100 .dylib files per archive, 100 MB archive size, and 300 MB total extracted size.
       </p>
       {disabledReason ? <p className="warningNote">{disabledReason}</p> : null}
-      <LoadingButton loading={loading} disabled={Boolean(disabledReason)} onClick={submitZipUpload}>Create zip processing job</LoadingButton>
+      <LoadingButton loading={loading} disabled={Boolean(disabledReason)} onClick={submitZipUpload}>Start upload job</LoadingButton>
       <ErrorBox error={error} />
       {job ? (
         <div className="successBox uploadResultBox">
-          <strong>Zip upload job {job.status || 'created'}.</strong>
+          <strong>Archive upload {job.status || 'created'}.</strong>
           <div className="contextStrip">
             <span>Dataset: <strong>{job.dataset_name}</strong></span>
             <span>iOS version: <strong>{job.ios_version}</strong></span>
@@ -2831,24 +2831,9 @@ export default function App() {
 
         {activePage === 'upload' ? (
           <>
-            <PageIntro eyebrow="Platform-extracted private data" title="Upload Dylib">
-              Upload one .dylib file or a .zip batch, run high-level LIEF-style extraction on the API, and save extracted metrics into a private dataset.
+            <PageIntro eyebrow="Platform-extracted private data" title="Upload Library Files">
+              Upload a .zip archive containing one or more .dylib files. DylibScope extracts high-level static metrics and saves them into a private dataset.
             </PageIntro>
-            <DylibUploadForm
-              authState={authState}
-              datasets={datasets}
-              selectedDataset={selectedDataset}
-              onUploadComplete={(datasetName) => {
-                setSelectedDataset(datasetName);
-                setDatasetRefreshKey((value) => value + 1);
-                setObservationRefreshKey((value) => value + 1);
-              }}
-              onOpenLibrary={(datasetName) => {
-                setSelectedDataset(datasetName || selectedDataset);
-                setDatasetRefreshKey((value) => value + 1);
-                setActivePage('library');
-              }}
-            />
             <DylibZipUploadForm
               authState={authState}
               datasets={datasets}

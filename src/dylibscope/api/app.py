@@ -566,7 +566,12 @@ def create_app(
         }
 
 
-    @app.post("/v1/user-uploads/dylib", status_code=201)
+    @app.post(
+        "/v1/user-uploads/dylib",
+        deprecated=True,
+        summary="Deprecated single-file HLA upload",
+        description="Deprecated. Use /v1/user-uploads/dylib-zip with a .zip archive instead.",
+    )
     async def api_upload_dylib_hla(
         dataset_name: str = Form(..., description="Private dataset name to create or append to."),
         ios_version: str = Form(..., description="Full firmware label or user-supplied iOS version label."),
@@ -643,7 +648,12 @@ def create_app(
         }
 
 
-    @app.post("/v1/user-uploads/dylib-zip", status_code=202)
+    @app.post(
+        "/v1/user-uploads/dylib-zip",
+        status_code=202,
+        summary="Upload .dylib archive",
+        description="Upload a .zip archive containing one or more .dylib files and create an HLA extraction job.",
+    )
     async def api_upload_dylib_zip_hla(
         background_tasks: BackgroundTasks,
         dataset_name: str = Form(..., description="Private dataset name to create or append to."),
@@ -707,7 +717,11 @@ def create_app(
         job["warning"] = USER_UPLOADED_HLA_WARNING
         return job
 
-    @app.get("/v1/user-uploads/jobs/{job_id}")
+    @app.get(
+        "/v1/user-uploads/jobs/{job_id}",
+        summary="Get upload job status",
+        description="Return the status and results of a zip upload job.",
+    )
     def api_get_upload_job(
         job_id: str,
         conn: Connection = Depends(get_conn),
