@@ -109,6 +109,15 @@ def parse_ios_version_label(value: str) -> ParsedIOSVersion:
     future dataset formats.
     """
     label = str(value).strip()
+    # User-uploaded datasets may use release-only labels such as '12.0' or '10.3.3'.
+    # Keep version_label stable while populating ios_release for UI filters and summaries.
+    if re.fullmatch(r"\d+(?:\.\d+){0,2}", label):
+        return ParsedIOSVersion(
+            version_label=label,
+            device_model=None,
+            ios_release=label,
+            build_number=None,
+        )
     match = IOS_VERSION_LABEL_RE.match(label)
     if not match:
         return ParsedIOSVersion(
@@ -159,7 +168,7 @@ def json_dumps_stable(value: Any) -> str:
 
 
 def read_jsonl(path: str) -> Iterable[Dict[str, Any]]:
-    with open(path, "r", encoding="utf-8") as handle:
+    with open(path, encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
             text = line.strip()
             if not text:

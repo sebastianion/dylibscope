@@ -1045,3 +1045,19 @@ code {
   background: #16a34a;
   transition: width 0.25s ease;
 }
+
+.uploadResultBoxWarning {
+  background: #fffbeb;
+  border-color: #facc15;
+}
+
+.uploadResultBoxError {
+  background: #fef2f2;
+  border-color: #fca5a5;
+  color: #991b1b;
+}
+
+.uploadResultBoxError .contextStrip span,
+.uploadResultBoxWarning .contextStrip span {
+  color: inherit;
+}

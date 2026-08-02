@@ -829,7 +829,7 @@ function buildManualObservationPayload(form, metricValues, datasets) {
     errors.push('Library name must end in .dylib.');
   }
   if (!form.iosVersion.trim()) {
-    errors.push('iOS version label is required.');
+    errors.push('iOS release or version label is required.');
   }
   if (!Object.keys(metrics).length) {
     errors.push('At least one metric value is required.');
@@ -1451,7 +1451,7 @@ function DylibUploadForm({ authState, datasets, selectedDataset, onUploadComplet
       errors.push('The uploaded file name must end in .dylib.');
     }
     if (!form.iosVersion.trim()) {
-      errors.push('iOS version label is required.');
+      errors.push('iOS release or version label is required.');
     }
     if (form.libraryName.trim() && !form.libraryName.trim().toLowerCase().endsWith('.dylib')) {
       errors.push('Library name override must end in .dylib.');
@@ -1578,7 +1578,7 @@ function DylibUploadForm({ authState, datasets, selectedDataset, onUploadComplet
         </label>
         <label>
           iOS version label
-          <input value={form.iosVersion} onChange={(event) => updateForm('iosVersion', event.target.value)} placeholder="iPhone11,8_12.0_16A366" />
+          <input value={form.iosVersion} onChange={(event) => updateForm('iosVersion', event.target.value)} placeholder="12.0 or iPhone11,8_12.0_16A366" />
         </label>
         <label>
           Library name override
@@ -1592,7 +1592,7 @@ function DylibUploadForm({ authState, datasets, selectedDataset, onUploadComplet
       <LoadingButton loading={loading} disabled={Boolean(disabledReason)} onClick={submitUpload}>Upload and extract HLA metrics</LoadingButton>
       <ErrorBox error={error} />
       {result ? (
-        <div className="successBox uploadResultBox">
+        <div className={jobResultClass}>
           <strong>Upload processed successfully.</strong>
           <div className="contextStrip">
             <span>Dataset: <strong>{resultDataset}</strong></span>
@@ -1700,7 +1700,7 @@ function DylibZipUploadForm({ authState, datasets, selectedDataset, onUploadComp
       errors.push('The uploaded file name must end in .zip.');
     }
     if (!form.iosVersion.trim()) {
-      errors.push('iOS version label is required.');
+      errors.push('iOS release or version label is required.');
     }
     if (form.targetMode === 'new_private_dataset') {
       const targetName = form.datasetName.trim();
@@ -1756,6 +1756,23 @@ function DylibZipUploadForm({ authState, datasets, selectedDataset, onUploadComp
       : '';
   const progress = Math.max(0, Math.min(Number(job?.progress_percent || 0), 100));
   const completed = ['completed', 'completed_with_failures', 'failed'].includes(job?.status || '');
+  const processedCount = Number(job?.processed_count || 0);
+  const failedCount = Number(job?.failed_count || 0);
+  const allCandidatesFailed = completed && failedCount > 0 && processedCount === 0;
+  const jobResultClass = job?.status === 'failed' || allCandidatesFailed
+    ? 'uploadResultBox uploadResultBoxError'
+    : job?.status === 'completed_with_failures'
+      ? 'uploadResultBox uploadResultBoxWarning'
+      : 'successBox uploadResultBox';
+  const jobStatusTitle = job?.status === 'completed'
+    ? 'Upload job completed.'
+    : job?.status === 'completed_with_failures'
+      ? (allCandidatesFailed ? 'Upload job failed.' : 'Upload job completed with failures.')
+      : job?.status === 'failed'
+        ? 'Upload job failed.'
+        : job?.status === 'running'
+          ? 'Upload job running.'
+          : 'Upload job queued.';
   return (
     <Card title="Upload .zip archive">
       <p className="note">
@@ -1812,7 +1829,7 @@ function DylibZipUploadForm({ authState, datasets, selectedDataset, onUploadComp
         </label>
         <label>
           iOS version label
-          <input value={form.iosVersion} onChange={(event) => updateForm('iosVersion', event.target.value)} placeholder="iPhone11,8_12.0_16A366" />
+          <input value={form.iosVersion} onChange={(event) => updateForm('iosVersion', event.target.value)} placeholder="12.0 or iPhone11,8_12.0_16A366" />
         </label>
       </div>
       <p className="note">
@@ -1823,13 +1840,13 @@ function DylibZipUploadForm({ authState, datasets, selectedDataset, onUploadComp
       <ErrorBox error={error} />
       {job ? (
         <div className="successBox uploadResultBox">
-          <strong>Archive upload {job.status || 'created'}.</strong>
+          <strong>{jobStatusTitle}</strong>
           <div className="contextStrip">
             <span>Dataset: <strong>{job.dataset_name}</strong></span>
             <span>iOS version: <strong>{job.ios_version}</strong></span>
             <span>Total .dylib files: <strong>{job.total_files}</strong></span>
-            <span>Processed: <strong>{job.processed_count || 0}</strong></span>
-            <span>Failed: <strong>{job.failed_count || 0}</strong></span>
+            <span>Processed: <strong>{processedCount}</strong></span>
+            <span>Failed: <strong>{failedCount}</strong></span>
             <span>Ignored: <strong>{job.ignored_count || 0}</strong></span>
           </div>
           <div className="jobProgressOuter" aria-label="Zip upload job progress">
@@ -1870,7 +1887,7 @@ function DylibZipUploadForm({ authState, datasets, selectedDataset, onUploadComp
               </table>
             </div>
           ) : null}
-          <button type="button" className="secondaryButton" onClick={() => onOpenLibrary?.(job.dataset_name)} disabled={!completed && !(job.processed_count > 0)}>
+          <button type="button" className="secondaryButton" onClick={() => onOpenLibrary?.(job.dataset_name)} disabled={!processedCount}>
             Open dataset in Library Explorer
           </button>
         </div>
