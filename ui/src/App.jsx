@@ -1033,7 +1033,7 @@ function UserObservationForm({ authState, datasets, selectedDataset, onObservati
           <input value={form.library} onChange={(event) => updateForm('library', event.target.value)} placeholder="libExample.dylib" />
         </label>
         <label>
-          iOS version label
+          iOS release or version label
           <input value={form.iosVersion} onChange={(event) => updateForm('iosVersion', event.target.value)} placeholder="iPhone15,2_17.0_21A329" />
         </label>
         <label>
@@ -1577,7 +1577,7 @@ function DylibUploadForm({ authState, datasets, selectedDataset, onUploadComplet
           <input type="file" accept=".dylib" onChange={(event) => setFile(event.target.files?.[0] || null)} />
         </label>
         <label>
-          iOS version label
+          iOS release or version label
           <input value={form.iosVersion} onChange={(event) => updateForm('iosVersion', event.target.value)} placeholder="12.0 or iPhone11,8_12.0_16A366" />
         </label>
         <label>
@@ -1763,7 +1763,7 @@ function DylibZipUploadForm({ authState, datasets, selectedDataset, onUploadComp
     ? 'uploadResultBox uploadResultBoxError'
     : job?.status === 'completed_with_failures'
       ? 'uploadResultBox uploadResultBoxWarning'
-      : 'successBox uploadResultBox';
+      : 'uploadResultBox uploadResultBoxSuccess';
   const jobStatusTitle = job?.status === 'completed'
     ? 'Upload job completed.'
     : job?.status === 'completed_with_failures'
@@ -1773,6 +1773,16 @@ function DylibZipUploadForm({ authState, datasets, selectedDataset, onUploadComp
         : job?.status === 'running'
           ? 'Upload job running.'
           : 'Upload job queued.';
+  const jobProgressOuterClass = job?.status === 'failed' || allCandidatesFailed
+    ? 'jobProgressOuter jobProgressOuterError'
+    : job?.status === 'completed_with_failures'
+      ? 'jobProgressOuter jobProgressOuterWarning'
+      : 'jobProgressOuter';
+  const jobProgressInnerClass = job?.status === 'failed' || allCandidatesFailed
+    ? 'jobProgressInner jobProgressInnerError'
+    : job?.status === 'completed_with_failures'
+      ? 'jobProgressInner jobProgressInnerWarning'
+      : 'jobProgressInner';
   return (
     <Card title="Upload .zip archive">
       <p className="note">
@@ -1828,7 +1838,7 @@ function DylibZipUploadForm({ authState, datasets, selectedDataset, onUploadComp
           <input type="file" accept=".zip,application/zip" onChange={(event) => setZipFile(event.target.files?.[0] || null)} />
         </label>
         <label>
-          iOS version label
+          iOS release or version label
           <input value={form.iosVersion} onChange={(event) => updateForm('iosVersion', event.target.value)} placeholder="12.0 or iPhone11,8_12.0_16A366" />
         </label>
       </div>
@@ -1839,7 +1849,7 @@ function DylibZipUploadForm({ authState, datasets, selectedDataset, onUploadComp
       <LoadingButton loading={loading} disabled={Boolean(disabledReason)} onClick={submitZipUpload}>Start upload job</LoadingButton>
       <ErrorBox error={error} />
       {job ? (
-        <div className="successBox uploadResultBox">
+        <div className={jobResultClass}>
           <strong>{jobStatusTitle}</strong>
           <div className="contextStrip">
             <span>Dataset: <strong>{job.dataset_name}</strong></span>
@@ -1849,8 +1859,8 @@ function DylibZipUploadForm({ authState, datasets, selectedDataset, onUploadComp
             <span>Failed: <strong>{failedCount}</strong></span>
             <span>Ignored: <strong>{job.ignored_count || 0}</strong></span>
           </div>
-          <div className="jobProgressOuter" aria-label="Zip upload job progress">
-            <div className="jobProgressInner" style={{ width: `${progress}%` }} />
+          <div className={jobProgressOuterClass} aria-label="Zip upload job progress">
+            <div className={jobProgressInnerClass} style={{ width: `${progress}%` }} />
           </div>
           <p className="muted">Progress: {progress}%</p>
           {job.results?.length ? (

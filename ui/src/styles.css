@@ -1012,6 +1012,18 @@ code {
 .uploadResultBox {
   display: grid;
   gap: 12px;
+  border: 1px solid #bbf7d0;
+  border-radius: 16px;
+  background: #f0fdf4;
+  color: #166534;
+  padding: 12px 14px;
+  margin: 14px 0;
+}
+
+.uploadResultBoxSuccess {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
 }
 
 .uploadResultBox .contextStrip {
@@ -1060,4 +1072,31 @@ code {
 .uploadResultBoxError .contextStrip span,
 .uploadResultBoxWarning .contextStrip span {
   color: inherit;
+}
+.jobProgressOuterError {
+  background: #fee2e2;
+  border-color: #fca5a5;
+}
+
+.jobProgressInnerError {
+  background: #dc2626;
+}
+
+
+.jobProgressOuterWarning {
+  background: #fef3c7;
+  border-color: #facc15;
+}
+
+.jobProgressInnerWarning {
+  background: #f59e0b;
+}
+
+
+.uploadResultBoxError strong {
+  color: #991b1b;
+}
+
+.uploadResultBoxWarning strong {
+  color: #92400e;
 }
