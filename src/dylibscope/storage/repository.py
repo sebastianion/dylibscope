@@ -507,6 +507,95 @@ def _get_or_create_manual_observation(
     return observation_id, "created"
 
 
+
+def _get_or_create_upload_observation_by_ios_release(
+    conn: Connection,
+    *,
+    dataset_id: int,
+    library_id: int,
+    ios_version: str,
+    original_path: Optional[str],
+    conflict_mode: str,
+) -> Tuple[int, str]:
+    """Create or replace one uploaded-HLA observation using iOS release as identity.
+
+    Upload datasets accept both release-only values such as ``12.0`` and full
+    firmware labels such as ``iPhone11,8_12.0_16A366``. Those two inputs should
+    not create two timeline observations for the same library/release.
+    """
+    parsed = parse_ios_version_label(ios_version)
+    ios_version_id = _get_or_create_ios_version(conn, ios_version)
+
+    if parsed.ios_release:
+        row = (
+            conn.execute(
+                text(
+                    """
+                    SELECT
+                        o.id,
+                        o.ios_version_id,
+                        iv.version_label,
+                        iv.ios_release
+                    FROM library_observations o
+                    JOIN ios_versions iv ON iv.id = o.ios_version_id
+                    WHERE o.dataset_id = :dataset_id
+                      AND o.library_id = :library_id
+                      AND iv.ios_release = :ios_release
+                    ORDER BY
+                        CASE
+                            WHEN iv.version_label = :ios_version THEN 0
+                            WHEN iv.version_label = :ios_release THEN 1
+                            ELSE 2
+                        END,
+                        iv.version_label
+                    LIMIT 1
+                    """
+                ),
+                {
+                    "dataset_id": dataset_id,
+                    "library_id": library_id,
+                    "ios_release": parsed.ios_release,
+                    "ios_version": parsed.version_label,
+                },
+            )
+            .mappings()
+            .first()
+        )
+        if row:
+            if conflict_mode == "reject":
+                raise ObservationConflictError(
+                    "observation already exists for this dataset, library, and iOS release; "
+                    "use conflict_mode=replace to replace it explicitly"
+                )
+            if conflict_mode != "replace":
+                raise ValueError("conflict_mode must be either 'reject' or 'replace'")
+            observation_id = int(row["id"])
+            update_values = {
+                "ios_version_id": ios_version_id,
+                "hla_source_seen": 1,
+                "lla_source_seen": 0,
+            }
+            if original_path:
+                update_values["original_path"] = original_path
+            conn.execute(
+                library_observations.update()
+                .where(library_observations.c.id == observation_id)
+                .values(**update_values)
+            )
+            conn.execute(metric_values.delete().where(metric_values.c.observation_id == observation_id))
+            return observation_id, "replaced"
+
+    return _get_or_create_manual_observation(
+        conn,
+        dataset_id=dataset_id,
+        library_id=library_id,
+        ios_version_id=ios_version_id,
+        original_path=original_path,
+        has_hla_metrics=True,
+        has_lla_metrics=False,
+        conflict_mode=conflict_mode,
+    )
+
 def _storage_values_for_metric(metric_name: str, value_type: str, value: Any) -> Dict[str, Any]:
     if value_type == "numeric":
         if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0:
@@ -855,15 +944,12 @@ def create_user_hla_upload_observation(
         raise ValueError("target_mode must be either 'new_private_dataset' or 'append_private_dataset'")
 
     library_id = _get_or_create_library(conn, library_name)
-    ios_version_id = _get_or_create_ios_version(conn, ios_version)
-    observation_id, write_operation = _get_or_create_manual_observation(
+    observation_id, write_operation = _get_or_create_upload_observation_by_ios_release(
         conn,
         dataset_id=dataset_id,
         library_id=library_id,
-        ios_version_id=ios_version_id,
+        ios_version=ios_version,
         original_path=original_path,
-        has_hla_metrics=True,
-        has_lla_metrics=False,
         conflict_mode=conflict_mode,
     )
     for metric_name, value in metrics.items():
