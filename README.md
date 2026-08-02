@@ -1,357 +1,170 @@
-# DylibScope: Static Security Trend Analysis of iOS Dynamic Libraries
+# DylibScope
 
-DylibScope is a static analysis project for studying the evolution of iOS dynamic libraries across multiple iOS versions. It extracts high-level Mach-O metadata and low-level binary metrics from `.dylib` files, stores the results as JSONL datasets, and generates interactive plots and a textual security trend analysis report.
+**Static security trend analysis of iOS dynamic libraries.**
 
-The project is intended for mobile security research and coursework. It does **not** prove that a library is vulnerable. The reported scores and labels are heuristic indicators that help identify version transitions or libraries that may deserve deeper manual review.
+DylibScope studies how iOS `.dylib` files evolve across iOS versions. It combines high-level Mach-O analysis and low-level binary analysis, stores normalized observations, exposes them through a web platform and API, and generates plots and heuristic security trend summaries.
+
+The project is intended for mobile security research and coursework. It does **not** prove that a library is vulnerable. Scores, bands, and trend labels are heuristic triage indicators that can help identify libraries or version transitions that deserve deeper manual review.
+
+## Live Project
+
+- **Web application:** <https://dylibscope.onrender.com>
+- **API documentation:** <https://dylibscope-api.onrender.com/docs>
+- **API base URL:** <https://dylibscope-api.onrender.com>
+- **Interactive dashboards:** <https://sebastianion.github.io/dylibscope/>
+
+The frontend and FastAPI backend are deployed on Render. Production datasets are stored in Supabase PostgreSQL, while generated Plotly dashboards are published through GitHub Pages.
 
 ## Overview
 
-DylibScope has two static analysis branches:
+DylibScope focuses on longitudinal static analysis of iOS system dynamic libraries. It supports:
 
-1. **High-level analysis**
-   - Uses Python and LIEF to parse Mach-O dynamic libraries.
-   - Extracts metadata such as sections, symbols, imported functions, exported functions, library path, and iOS version label.
-
-2. **Low-level analysis**
-   - Uses Ghidra in headless mode with a Jython script.
-   - Extracts implementation-level metrics such as internal function count, internal variable count, CFG edge count, allocation call count, syscall-related function count, and Mach-port-related function count.
-
-Both branches produce JSONL datasets. These datasets are consumed by the visualization and security trend analysis modules.
+- high-level Mach-O analysis with LIEF;
+- low-level analysis with Ghidra headless and Jython;
+- comparison of libraries and iOS-version transitions;
+- heuristic library-level and version-level security summaries;
+- normalized dataset storage and querying;
+- a deployed React interface and FastAPI backend;
+- private manual datasets and user-uploaded high-level analysis;
+- generated Plotly dashboards and textual trend reports.
 
 ## Architecture
 
-The pipeline is organized as follows:
-
 ![DylibScope architecture](docs/images/architecture.png)
 
-Main components:
-
-| Component | Role |
-|---|---|
-| iExtractor output | Provides extracted iOS `.dylib` files |
-| LIEF pipeline | Extracts symbols, sections, imports, and exports |
-| Ghidra headless pipeline | Extracts functions, CFG edges, allocation/syscall/Mach-port metrics |
-| JSONL datasets | Store one record per library and iOS version |
-| Plot generator | Builds interactive Plotly visualizations |
-| Security trend analysis | Computes heuristic version-level trend indicators |
-| GitHub Pages | Publishes interactive results |
-
-## Repository Structure
-
 ```text
-dylibscope/
-├── docs/                          # GitHub Pages output
-├── scripts/                       # Runnable project commands
-├── src/
-│   └── dylibscope/
-│       ├── analysis_graph/        # Plot generation logic
-│       ├── api/                   # FastAPI client API for stored metrics and reports
-│       ├── config/                # Shared global configuration
-│       ├── high_level_analysis/   # LIEF-based extraction
-│       ├── low_level_analysis/    # Ghidra/Jython extraction
-│       ├── security_analysis/     # Trend reports, heuristic scoring, and derived reports
-│       └── storage/               # Normalized SQLite schema, import, and query helpers
-├── test/                          # Unit, storage, and API tests
-│   ├── api/                       # API endpoint tests
-│   ├── security_analysis/         # Derived scoring tests
-│   └── storage/                   # Storage/import tests
-├── pyproject.toml
-└── README.md
+iOS .dylib files
+    ├── LIEF high-level analysis
+    └── Ghidra low-level analysis
+             ↓
+         JSONL datasets
+             ↓
+      Normalized storage
+   SQLite / Supabase PostgreSQL
+             ↓
+        FastAPI backend
+             ↓
+ React UI / reports / dashboards
 ```
 
+The offline analysis pipeline generates the baseline research data. The deployed platform reads normalized results from storage and provides interactive exploration, comparison, reporting, and private user-dataset workflows.
 
-## Requirements
+## Analysis and Data
 
-The Python part of the project targets **Python 3.9 or newer**.
+| Analysis | Engine | Example metrics |
+|---|---|---|
+| High-level analysis | Python + LIEF | sections, symbols, imports, exports, deployment target |
+| Low-level analysis | Ghidra headless + Jython | CFG edges, internal functions/variables, allocation calls, syscall-related functions, Mach-port-related functions |
 
-Main Python dependencies include:
+DylibScope currently works with three main dataset categories:
 
-- `lief`
-- `pandas`
-- `plotly`
+| Dataset type | Description |
+|---|---|
+| `public-baseline` | Baseline HLA + LLA observations generated by the project pipelines |
+| Manual private dataset | User-provided observations created through the UI or API |
+| Uploaded HLA private dataset | High-level metrics extracted from user-supplied `.dylib` files |
 
-Development dependencies include:
+Uploaded binaries are processed temporarily. Only extracted metrics are retained. Cloud upload processing currently performs high-level LIEF analysis only; Ghidra low-level analysis remains an offline workflow.
 
-- `ruff`
-- `pytest`
-- `pytest-cov`
+## Web Platform
 
-The low-level extraction pipeline also requires a local Ghidra installation. The Ghidra script runs in Ghidra/Jython and is intentionally kept separate from normal Python package imports.
+The deployed interface provides:
 
-## Setup
+- **Library Explorer** for browsing metrics and security reports;
+- **Compare** for comparing libraries or one library across iOS versions;
+- **iOS Summary** for version-level heuristic summaries;
+- **Manual Datasets** for creating and managing private observations;
+- **Upload Library Files** for high-level analysis of `.dylib` files supplied in a `.zip`;
+- **Dashboards** for accessing generated interactive visualizations;
+- **Methodology** for metric and scoring context.
 
-Create and activate a virtual environment:
+Public baseline data is available through the platform, while user-created datasets are private to the current authenticated session/user.
+
+## API
+
+The FastAPI backend exposes dataset, library, comparison, reporting, manual-observation, and upload operations.
+
+Interactive Swagger documentation:
+
+<https://dylibscope-api.onrender.com/docs>
+
+<details>
+<summary><strong>API endpoints</strong></summary>
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/health` | API health check |
+| GET | `/v1/auth/session` | Current authenticated or anonymous session |
+| GET | `/v1/datasets` | List visible datasets |
+| POST | `/v1/user-observations` | Create a manual user observation |
+| GET | `/v1/user-observations` | List user observations |
+| DELETE | `/v1/user-observations` | Delete a user observation |
+| POST | `/v1/user-uploads/dylib-zip` | Upload a `.zip` containing `.dylib` files |
+| GET | `/v1/user-uploads/jobs/{job_id}` | Read upload job status |
+| DELETE | `/v1/user-datasets/{dataset_name}` | Delete a private user dataset |
+| GET | `/v1/libraries` | List libraries |
+| GET | `/v1/ios-versions` | List iOS versions |
+| GET | `/v1/ios-versions/{ios_version}/security-summary` | Version-level heuristic security summary |
+| GET | `/v1/libraries/{library_name}/metrics` | Metrics for one library |
+| GET | `/v1/libraries/{library_name}/timeline` | Timeline for one library |
+| GET | `/v1/libraries/{library_name}/security-report` | Library-level heuristic security report |
+| POST | `/v1/libraries/compare` | Compare multiple libraries |
+| POST | `/v1/libraries/{library_name}/compare-versions` | Compare one library across versions |
+
+</details>
+
+<details>
+<summary><strong>Example API requests</strong></summary>
+
+Query high-level metrics for one library:
+
+```bash
+curl "http://127.0.0.1:8000/v1/libraries/libsqlite3.0.dylib/metrics?dataset_name=public-baseline&ios_version=6.0&level=high"
+```
+
+Compare one library across iOS versions:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/v1/libraries/libsqlite3.0.dylib/compare-versions" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "dataset_name": "public-baseline",
+    "ios_versions": ["6.0", "7.0"],
+    "metrics": ["num_symbols", "imported_function_count"]
+  }'
+```
+
+Upload a `.zip` containing one or more `.dylib` files:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/v1/user-uploads/dylib-zip" \
+  -H "Authorization: Bearer <access-token>" \
+  -F "dataset_name=my-uploaded-dataset" \
+  -F "target_mode=new_private_dataset" \
+  -F "conflict_mode=reject" \
+  -F "ios_version=12.0" \
+  -F "file=@libraries.zip;type=application/zip"
+```
+
+</details>
+
+## Local Development
+
+### Requirements
+
+- Python 3.9 or newer
+- Node.js and npm for the frontend
+- Ghidra for the low-level extraction pipeline
+
+Create a virtual environment and install the Python project:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
+python -m pip install -e ".[dev,api]"
 ```
 
-Install the project in editable mode:
-
-```bash
-python -m pip install -e ".[dev]"
-```
-
-## Datasets
-
-DylibScope works with two generated JSONL datasets:
-
-High-level dataset:
-```text
-src/dylibscope/high_level_analysis/dylibs_analysis_local.json
-```
-
-Low-level dataset:
-```
-src/dylibscope/low_level_analysis/ghidra_out/merged.json
-```
-
-The default dataset paths are defined in:
-
-```text
-src/dylibscope/config/datasets.py
-```
-
-These paths are defaults only. Users can provide custom dataset paths when generating plots or reports.
-
-## High-Level Extraction
-
-The high-level pipeline uses LIEF to parse Mach-O `.dylib` files.
-
-Typical output fields include:
-
-- library path
-- iOS version label
-- section count
-- symbol count
-- imported functions
-- exported functions
-
-Run the high-level extraction module from the repository root:
-
-```bash
-python -m dylibscope.high_level_analysis.extract_high_level
-```
-
-## Low-Level Extraction
-
-The low-level pipeline uses Ghidra headless analysis.
-
-It extracts metrics such as:
-
-- internal function count
-- internal variable count
-- CFG edge count
-- allocation call count
-- syscall-related function count
-- Mach-port-related function count
-
-The low-level pipeline is executed through Ghidra's `analyzeHeadless` command. The extraction script runs inside Ghidra/Jython, not as a normal Python script. The exact paths depend on the local Ghidra installation, temporary project location, extracted iOS library directory, script location, and output directory.
-
-
-```bash
-/path/to/ghidra/support/analyzeHeadless \
-  /path/to/temporary/ghidraProject ghidraPr \
-  -import /path/to/iextractor/out \
-  -recursive \
-  -overwrite \
-  -max-cpu 8 \
-  -scriptPath /path/to/ghidra_scripts \
-  -postScript extract_low_level.py /path/to/ghidra_out \
-  -deleteproject \
-  -log /path/to/ghidra_headless.log
-```
-
-The resulting per-library outputs are aggregated into a merged JSONL dataset used by the plotting and trend-analysis scripts.
-
-## Generate Interactive Plots
-
-Generate the default high-level and low-level plots:
-
-```bash
-python scripts/generate_plots.py
-```
-
-The generated HTML files are written to `docs/` and can be opened directly in a browser.
-
-
-## Generate Security Trend Reports
-
-Generate the default high-level and low-level security trend reports:
-
-```bash
-python scripts/generate_reports.py
-```
-
-Custom dataset paths can be supplied:
-
-```bash
-python scripts/generate_reports.py \
-  --hla-input path/to/high_level_dataset.jsonl \
-  --lla-input path/to/low_level_dataset.jsonl
-```
-
-The reports compare consecutive iOS versions using common-library overlap and metric deltas. Version transitions may be labeled as:
-
-- stable
-- expanding
-- hardening
-- partial snapshot
-- insufficient overlap
-
-These labels are heuristic and should be interpreted as triage signals, not vulnerability claims.
-
-## Normalized SQLite Storage
-
-After the high-level and low-level JSONL datasets have been generated, DylibScope can import them into a normalized SQLite database. This provides a local query backend for library metrics and prepares the project for the future client API.
-
-
-The storage layer normalizes:
-
-* datasets
-* iOS firmware labels
-* library names
-* high-level metrics
-* low-level metrics
-* library observations across iOS versions
-
-The importer stores both the full firmware label and parsed version fields. For example:
-
-```text
-iPhone11,8_12.0_16A366
-```
-
-is stored as:
-
-```text
-device_model  = iPhone11,8
-ios_release   = 12.0
-build_number  = 16A366
-```
-
-This allows queries by either the full firmware label or only the iOS release.
-
-### Import JSONL datasets into SQLite
-
-From the repository root:
-
-```bash
-python scripts/import_datasets.py \
-  --db data/dylibscope.sqlite \
-  --dataset-name public-baseline \
-  --hla-input src/dylibscope/high_level_analysis/dylibs_analysis_local.json \
-  --lla-input src/dylibscope/low_level_analysis/ghidra_out/merged.json
-```
-
-This creates the SQLite database at:
-
-```text
-data/dylibscope.sqlite
-```
-
-If the `data/` directory does not exist, it is created automatically.
-
-The generated SQLite database is a local artifact and should normally not be committed.
-
-### Query metrics from the SQLite database
-
-Query all high-level metrics for a library in a specific iOS release:
-
-```bash
-python scripts/query_metrics.py libsqlite3.0.dylib \
-  --db data/dylibscope.sqlite \
-  --dataset-name public-baseline \
-  --ios-version 6.0 \
-  --level high
-```
-
-Query low-level metrics for a library:
-
-```bash
-python scripts/query_metrics.py libSimplifiedChineseConverter.dylib \
-  --db data/dylibscope.sqlite \
-  --dataset-name public-baseline \
-  --ios-version 12.0 \
-  --level low
-```
-
-Query using the full firmware label:
-
-```bash
-python scripts/query_metrics.py libSimplifiedChineseConverter.dylib \
-  --db data/dylibscope.sqlite \
-  --dataset-name public-baseline \
-  --ios-version iPhone11,8_12.0_16A366 \
-  --level low
-```
-
-Query one exact metric without specifying whether it is high-level or low-level:
-
-```bash
-python scripts/query_metrics.py libsqlite3.0.dylib \
-  --db data/dylibscope.sqlite \
-  --dataset-name public-baseline \
-  --metric imported_function_count
-```
-
-Query all available metrics for a library across every iOS version in which it appears:
-
-```bash
-python scripts/query_metrics.py libsqlite3.0.dylib \
-  --db data/dylibscope.sqlite \
-  --dataset-name public-baseline
-```
-
-### SQLite inspection
-
-Inspect the generated database manually:
-
-```bash
-sqlite3 data/dylibscope.sqlite ".tables"
-```
-
-Useful sanity checks:
-
-```sql
-SELECT COUNT(*) FROM libraries;
-SELECT COUNT(*) FROM ios_versions;
-SELECT COUNT(*) FROM library_observations;
-SELECT COUNT(*) FROM metric_values;
-SELECT COUNT(*) FROM import_errors;
-```
-
-Check parsed iOS version labels:
-
-```sql
-SELECT version_label, device_model, ios_release, build_number
-FROM ios_versions
-LIMIT 10;
-```
-
-Check import errors:
-
-```sql
-SELECT *
-FROM import_errors
-LIMIT 20;
-```
-
-Ideally, the `import_errors` table should be empty. If it is not empty, inspect the rows to identify malformed or incomplete JSONL records.
-
-## Client API
-
-DylibScope provides a local FastAPI-based client API for querying the normalized SQLite database. The API reads already-generated metrics from SQLite; it does not run LIEF or Ghidra during requests.
-
-### Start the API
-
-Install API dependencies:
-
-```bash
-python -m pip install fastapi uvicorn
-```
-
-Create the SQLite database:
+Import generated HLA and LLA datasets into a local SQLite database:
 
 ```bash
 python scripts/import_datasets.py \
@@ -367,116 +180,37 @@ Run the API:
 python scripts/run_api.py --db data/dylibscope.sqlite
 ```
 
-Interactive documentation is available at:
-
-```text
-http://127.0.0.1:8000/docs
-```
-
-### Main endpoints
-
-```http
-GET /health
-GET /v1/libraries
-GET /v1/ios-versions
-GET /v1/libraries/{library_name}/metrics
-GET /v1/libraries/{library_name}/timeline
-POST /v1/libraries/compare
-POST /v1/libraries/{library_name}/compare-versions
-GET /v1/libraries/{library_name}/security-report
-GET /v1/ios-versions/{ios_version}/security-summary
-```
-
-### Example requests
-
-Query high-level metrics for one library:
+Run the frontend:
 
 ```bash
-curl "http://127.0.0.1:8000/v1/libraries/libsqlite3.0.dylib/metrics?dataset_name=public-baseline&ios_version=6.0&level=high"
+cd ui
+npm install
+npm run dev
 ```
 
-Query exact metrics without specifying high-level or low-level analysis:
+## Offline Analysis
+
+Run the LIEF-based high-level extraction:
 
 ```bash
-curl "http://127.0.0.1:8000/v1/libraries/libsqlite3.0.dylib/metrics?dataset_name=public-baseline&metrics=num_symbols,imported_function_count"
+python -m dylibscope.high_level_analysis.extract_high_level
 ```
 
-Compare two libraries in the same iOS scope:
+The low-level pipeline runs through Ghidra's `analyzeHeadless` command using the project's Jython extraction script. Its exact command depends on the local Ghidra installation and extracted firmware paths.
 
-```bash
-curl -X POST "http://127.0.0.1:8000/v1/libraries/compare" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "libraries": ["libsqlite3.0.dylib", "libresolv.dylib"],
-    "dataset_name": "public-baseline",
-    "ios_version": "6.0",
-    "metrics": ["num_symbols", "imported_function_count"]
-  }'
-```
-
-Compare the same library across iOS versions:
-
-```bash
-curl -X POST "http://127.0.0.1:8000/v1/libraries/libsqlite3.0.dylib/compare-versions" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "dataset_name": "public-baseline",
-    "ios_versions": ["6.0", "7.0"],
-    "metrics": ["num_symbols", "imported_function_count"]
-  }'
-```
-
-The comparison endpoints return `resolved_observations`, missing entries, and metric-level `results` with differences or deltas.
-
-### Security report endpoints
-
-Generate a heuristic static security report for one library:
-
-```bash
-curl "http://127.0.0.1:8000/v1/libraries/libsqlite3.0.dylib/security-report?dataset_name=public-baseline&ios_version=6.0"
-```
-
-Compare the same library between two iOS versions:
-
-```bash
-curl "http://127.0.0.1:8000/v1/libraries/libsqlite3.0.dylib/security-report?dataset_name=public-baseline&from_ios_version=6.0&to_ios_version=7.0"
-```
-
-Generate a version-level static security summary:
-
-```bash
-curl "http://127.0.0.1:8000/v1/ios-versions/10.3.3/security-summary?dataset_name=public-baseline&limit=10"
-```
-
-These endpoints use the existing DylibScope security-analysis profile weights and return heuristic static-complexity indicators, not vulnerability proof.
-
-### API tests
-
-```bash
-pytest test/storage/storage_import_test.py -v
-pytest test/storage/ios_version_parser_test.py -v
-pytest test/api/metrics_api_test.py -v
-pytest test/api/security_report_api_test.py -v
-pytest test/security_analysis/derived_scoring_test.py -v
-pytest -v
-```
-
-The API exposes static metrics and heuristic comparisons. Higher values may indicate larger static complexity or interface surface, but they do not prove vulnerabilities.
-
-## GitHub Pages Dashboard
-
-The public dashboard is served from the `docs/` directory.
-
-The dashboard links to the generated interactive Plotly visualizations. After regenerating plots, commit the updated HTML files in `docs/` if they should be reflected on GitHub Pages.
-
-Typical workflow:
+Generate interactive plots:
 
 ```bash
 python scripts/generate_plots.py
-git add docs/
-git commit -m "Update generated dashboard plots"
-git push
 ```
+
+Generate textual security trend reports:
+
+```bash
+python scripts/generate_reports.py
+```
+
+Generated dashboard files are written to `docs/`.
 
 ## Testing
 
@@ -486,14 +220,13 @@ Run the test suite:
 pytest
 ```
 
-Run linting and formatting:
+Run linting:
 
 ```bash
-ruff check src scripts test --fix
-ruff format src scripts test
+ruff check src scripts test
 ```
 
-Recommended validation before submission:
+Recommended validation before deployment or submission:
 
 ```bash
 ruff check src scripts test
@@ -501,38 +234,19 @@ pytest
 python -m compileall src
 python scripts/generate_plots.py
 python scripts/generate_reports.py
+cd ui && npm run build
 ```
 
-Optional validation for the storage and API layers:
+## Limitations
 
-```bash
-python scripts/import_datasets.py \
-  --db data/dylibscope.sqlite \
-  --dataset-name public-baseline \
-  --hla-input src/dylibscope/high_level_analysis/dylibs_analysis_local.json \
-  --lla-input src/dylibscope/low_level_analysis/ghidra_out/merged.json
-```
-
-```bash
-python scripts/query_metrics.py libsqlite3.0.dylib \
-  --db data/dylibscope.sqlite \
-  --dataset-name public-baseline \
-  --metric imported_function_count
-```
-
-```bash
-python scripts/run_api.py --db data/dylibscope.sqlite
-```
-
-## Known Limitations
-
-- The project performs static analysis only.
-- The reported security scores are heuristic indicators, not proof of vulnerabilities.
-- Low-level extraction depends on Ghidra and may take significant time on large firmware datasets.
-- Results depend on the completeness and consistency of the extracted `.dylib` dataset.
-- Some iOS versions may be partial snapshots, which can affect trend interpretation.
+- DylibScope performs static analysis only.
+- Security scores and bands are heuristic indicators, not vulnerability proof.
+- Cloud upload processing currently performs HLA only; Ghidra/LLA processing is not run in the upload workflow.
+- Low-level extraction depends on Ghidra and can take significant time on large firmware datasets.
+- Results depend on the completeness and consistency of the extracted iOS library data.
+- Partial firmware snapshots can affect longitudinal comparisons.
 - The project does not redistribute iOS firmware or Apple binaries.
 
-## License and Data Notice
+## Data Notice
 
 Users are responsible for obtaining and analyzing firmware data in a lawful and appropriate research environment.
